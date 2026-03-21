@@ -6,7 +6,8 @@
 
 // Determine API base URL correctly even if running via Live Server (port 5500)
 const IS_LOCAL = ['localhost','127.0.0.1'].includes(window.location.hostname) || window.location.protocol === 'file:';
-const API = IS_LOCAL ? 'http://localhost:5000' : '';
+const localName = window.location.hostname || '127.0.0.1';
+const API = IS_LOCAL ? `http://${localName}:5000` : '';
 
 // ─── Server Wake-Up (only on cloud — skipped on localhost) ───────────────────
 let serverReady = IS_LOCAL; // treat localhost as always-ready
@@ -495,7 +496,7 @@ async function submitReport() {
     try {
       res = await fetch(API + '/api/reports', { method: 'POST', body: fd });
     } catch (netErr) {
-      throw new Error('Cannot reach server. Please check your internet and try again.');
+      throw new Error(`Cannot reach python server at ${API || window.location.origin}. Make sure you have opened a terminal and run 'python app.py' so the backend is online!`);
     }
 
     const text = await res.text();
