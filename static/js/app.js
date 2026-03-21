@@ -732,6 +732,24 @@ async function handleRegister(e) {
     document.getElementById('reg-form').reset();
     if (regMarker) { regMap.removeLayer(regMarker); regMarker = null; }
     showToast('Station registered! You can now login.', 'success');
+
+    // Browser Push Notification for Registration
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('✅ Registration Successful!', {
+        body: `Your Fire Station account has been registered. Please log in to view the dashboard and receive alerts.`,
+        icon: '/static/icons/icon-192.png',
+      });
+    } else if ('Notification' in window && Notification.permission !== 'denied') {
+      Notification.requestPermission().then(perm => {
+        if (perm === 'granted') {
+          new Notification('✅ Registration Successful!', {
+            body: `Your Fire Station account has been registered. Please log in to view the dashboard and receive alerts.`,
+            icon: '/static/icons/icon-192.png',
+          });
+        }
+      });
+    }
+
     // Auto-redirect to login after 2s
     setTimeout(() => showPage('login'), 2200);
   } catch(ex) {

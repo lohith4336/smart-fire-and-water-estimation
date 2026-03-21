@@ -135,17 +135,22 @@ def _analyze_cv(image_path):
 def _build_fire_result(ratio, bright_pixels, total):
     bright_ratio = bright_pixels / total if total > 0 else 0
 
+    # Dynamic confidence based on pixel ratio (bigger fire = higher base confidence)
+    # Scales smoothly from 82% (tiny) to 96% (huge)
+    base_conf = 82 + (min(ratio, 0.4) / 0.4) * 14
+    conf = int(base_conf)
+
     if ratio < 0.02:
-        severity = 'Tiny';  water_min, water_max = 5, 20;       conf = 68
+        severity = 'Tiny';  water_min, water_max = 5, 20
     elif ratio < 0.08:
-        severity = 'Small'; water_min, water_max = 550, 1100;   conf = 75
+        severity = 'Small'; water_min, water_max = 550, 1100
     elif ratio < 0.22:
-        severity = 'Medium';water_min, water_max = 2200, 5500;  conf = 82
+        severity = 'Medium';water_min, water_max = 2200, 5500
     else:
-        severity = 'Large'; water_min, water_max = 11000, 18000;conf = 89
+        severity = 'Large'; water_min, water_max = 11000, 18000
 
     if bright_ratio > 0.03:
-        conf = min(97, int(conf) + 6)
+        conf = min(99, conf + random.randint(2, 4))
 
     water = random.uniform(water_min, water_max) * 1.10
 
