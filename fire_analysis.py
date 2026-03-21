@@ -1,10 +1,11 @@
 """
 fire_analysis.py — Smart fire detection via image color analysis.
-Drop-in interface: swap analyze_fire_image() with a real model later.
+Crash-proof cloud version. Strict fire-only detection (rejects sun/red objects).
 """
 import os
 import math
 import random
+import traceback
 
 try:
     from PIL import Image
@@ -13,303 +14,190 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
-# [ML HYBRID ENGINE INITIALIZATION]
-ML_MODEL = None
-RENDER_ENV = os.environ.get('RENDER') # Detect if we are on Render.com
+# ─── Cloud Environment Guard ─────────────────────────────────────────────────
+# Render.com sets the 'RENDER' env variable automatically.
+# We NEVER try to load heavy ML models there (512MB RAM limit).
+IS_CLOUD = bool(os.environ.get('RENDER') or os.environ.get('DYNO'))
 
-if not RENDER_ENV:
+ML_MODEL = None
+if not IS_CLOUD:
     try:
         from ultralytics import YOLO
         MODEL_PATH = os.path.join(os.path.dirname(__file__), 'yolo_fire_model.pt')
         if os.path.exists(MODEL_PATH):
             ML_MODEL = YOLO(MODEL_PATH)
-            print("✅ FireSense Hybrid ML Engine Active: Loaded yolo_fire_model.pt!")
+            print("✅ YOLO model loaded successfully.")
     except Exception:
         pass
-else:
-    print("🛡️ Render Cloud Defense: Disabling heavy ML model to conserve RAM (512MB limit).")
 
 
-def analyze_fire_image(image_path: str | None) -> dict:
+def analyze_fire_image(image_path):
     """
-    Analyze an image for fire presence and severity.
-    Returns structured analysis result.
+    Main entry point.  Always returns a complete dict — never crashes.
     """
-    if image_path and os.path.exists(image_path) and PIL_AVAILABLE:
-        return _analyze_with_hybrid(image_path)
-    else:
-        # No image / PIL not available → use random realistic simulation
-        return _simulate_analysis()
-
-def _analyze_with_hybrid(image_path: str) -> dict:
-    """Hybrid Architecture: Uses true ML (if trained) for detection, and CV heuristics for severity sizing!"""
     try:
-        img_full = Image.open(image_path).convert('RGB')
-        
-        global ML_MODEL
-        if ML_MODEL is None:
-            # Hot-load the YOLO model if the user didn't restart the server after training!
-            MODEL_PATH = os.path.join(os.path.dirname(__file__), 'yolo_fire_model.pt')
-            if os.path.exists(MODEL_PATH):
-                try:
-                    from ultralytics import YOLO
-                    ML_MODEL = YOLO(MODEL_PATH)
-                    print("🔥 Dynamically Hot-Swapped YOLO Model into memory!")
-                except ImportError:
-                    print("⚙️ Render Cloud Notice: Missing ultralytics, gracefully falling back to Color Engine!")
-
-        # 1. Machine Learning Classification (If Trained via YOLO dataset)
-        ml_fire_prob = None
-        if ML_MODEL is not None:
-            try:
-                # YOLOv8 handles PIL directly, fast and native!
-                results = ML_MODEL(img_full, verbose=False)
-                probs = results[0].probs
-                names = results[0].names
-                
-                # YOLO maps classes however it wants. Dynamically find which index is "fire"
-                fire_idx = None
-                for k, v in names.items():
-                    if 'fire' in v.lower() and 'non' not in v.lower() and 'no' not in v.lower():
-                        fire_idx = k
-                        break
-                
-                if fire_idx is not None:
-                    ml_fire_prob = float(probs.data[fire_idx].item())
-                else:
-                    ml_fire_prob = float(probs.data[0].item())
-            except Exception as e:
-                print(f"YOLO Warning: {e}")
-        
-        # 2. Computer Vision Heuristics (Severity Estimation)
-        img_full.thumbnail((300, 300))  # Slightly smaller to save memory
-        pixels = list(img_full.getdata())
-        total = len(pixels)
-        
-        fire_pixels = 0
-        bright_fire = 0
-        medium_fire = 0
-        ss = [] # Saturation collector
-        
-        import colorsys
-        for r, g, b in pixels:
-            h, s, v = colorsys.rgb_to_hsv(r/255.0, g/255.0, b/255.0)
-            
-            # Strict Flame Heuristic
-            if v > 0.70 and (0.04 <= h <= 0.16):
-                if s > 0.40 and r > g * 1.1: 
-                    fire_pixels += 1
-                    ss.append(s)
-                    if v > 0.90: bright_fire += 1
-                    elif v > 0.80: medium_fire += 1
-
-        ratio = fire_pixels / total if total > 0 else 0
-        
-        # --- SPATIAL DISPERSION CHECK (THE 'SUN' VETO) ---
-        is_chaotic = True
-        if fire_pixels > 20 and total > 0:
-            # Variance in Saturation: Sun coronas are very uniform (low variance).
-            # Fire has high variance (hot cores vs cooler edges).
-            avg_s = sum(ss) / len(ss)
-            s_variance = sum((s - avg_s)**2 for s in ss) / len(ss)
-            
-            # Simple Density Estimation based on ratio vs total pixels
-            # THE VETO: Solid, non-chaotic, uniform circular objects are rejected
-            if ratio < 0.25 and s_variance < 0.015:
-                is_chaotic = False # Solid uniform block found (likely the sun or a lamp)
-            elif ratio > 0.85:
-                is_chaotic = False # Perfectly solid block found (red wall)
-        elif fire_pixels > 0:
-            # Noise filtering
-            if fire_pixels < 15: is_chaotic = False
-        else:
-            is_chaotic = False
-        
-        # 3. Hybrid Decision Logic Engine
-        if ML_MODEL is not None and ml_fire_prob is not None:
-            # Overriding heuristic detection with true Machine Learning!
-            # Increase threshold for AI: Small models need 85%+ confidence to veto the structure check
-            fire_detected = bool(ml_fire_prob > 0.82) 
-            final_confidence = (ml_fire_prob * 100) if fire_detected else ((1.0 - ml_fire_prob) * 100)
-            
-            # --- HYBRID DUAL-VERIFICATION (ANTI-HALLUCINATION) ---
-            if fire_detected:
-                if not is_chaotic or ratio < 0.005: 
-                    fire_detected = False
-                    final_confidence = 92.0 # Confidently rejected by Structure Analyser
-                elif ratio > 0.85:
-                    fire_detected = False
-                    final_confidence = 95.0 # Too solid to be real textured fire.
-
-            if not fire_detected:
-                ratio = 0.0 
-        else:
-            # Fallback to standard CV pixel heuristics
-            fire_detected = ratio > 0.006 and is_chaotic
-            if ratio > 0.85:
-                fire_detected = False # Solid color rejection
-            final_confidence = min(99, 70 + (ratio * 100))
-
-        if not fire_detected:
-            return {
-                'fire_detected': False,
-                'severity': 'None',
-                'severity_color': '#9CA3AF',
-                'confidence': round(final_confidence, 2) if final_confidence else 95 + random.randint(0, 4),
-                'fire_pixel_ratio': round(ratio * 100, 1),
-                'water_liters': 0,
-                'water_display': '0 L',
-                'equipment': None,
-                'safety_tips': ['No fire detected in the image.', 'Please ensure the image is clear and contains the expected area.'],
-                'bounding_box': None,
-                'analyzed_at': __import__('datetime').datetime.utcnow().isoformat()
-            }
-
-        # Classify severity by physical ratio on screen!
-        if ratio < 0.02:
-            severity = 'Tiny'
-            water_min, water_max = 5, 20
-            confidence = final_confidence if ml_fire_prob is not None else 65 + random.randint(0, 10)
-        elif ratio < 0.08:
-            severity = 'Small'
-            water_min, water_max = 550, 1100
-            confidence = final_confidence if ml_fire_prob is not None else 72 + random.randint(0, 15)
-        elif ratio < 0.22:
-            severity = 'Medium'
-            water_min, water_max = 2200, 5500
-            confidence = final_confidence if ml_fire_prob is not None else 78 + random.randint(0, 12)
-        else:
-            severity = 'Large'
-            water_min, water_max = 11000, 18000
-            confidence = final_confidence if ml_fire_prob is not None else 85 + random.randint(0, 10)
-
-        water_base = random.uniform(water_min, water_max)
-        water_with_buffer = water_base * 1.10  # +10% safety buffer
-
-        # Simulate bounding box (center of image with size proportional to ratio)
-        w, h = img_full.size
-        box_size = min(w, h) * math.sqrt(ratio) * 2.5
-        cx, cy = w * 0.5, h * 0.5
-        bbox = {
-            'x': max(0, cx - box_size/2),
-            'y': max(0, cy - box_size/2),
-            'width': min(box_size, w),
-            'height': min(box_size, h)
-        }
-
-        return _build_result(severity, water_with_buffer, confidence, fire_detected=True, bbox=bbox, ratio=ratio)
-
+        if image_path and os.path.exists(image_path) and PIL_AVAILABLE:
+            return _analyze_cv(image_path)
     except Exception:
-        return _simulate_analysis()
+        traceback.print_exc()
+    return _no_fire_result(confidence=85.0)
 
 
-def _simulate_analysis(force_small=False) -> dict:
-    """Realistic simulation when no image available."""
-    severities = ['Tiny', 'Small', 'Medium', 'Large'] if not force_small else ['Small']
-    weights    = [0.2, 0.3, 0.3, 0.2] if not force_small else [1.0]
-    severity = random.choices(severities, weights=weights)[0]
+# ─── Core CV Engine ───────────────────────────────────────────────────────────
+def _analyze_cv(image_path):
+    """
+    Strict, multi-stage fire detection:
+      Stage 1  — Hue gate             (orange flame zone only)
+      Stage 2  — Luminance gate       (bright enough to be burning)
+      Stage 3  — Colour temperature   (R >> G > B gradient)
+      Stage 4  — Saturation variance  (fire is chaotic, sun is uniform)
+      Stage 5  — Texture / edge proxy (fire has many colour transitions)
+    Returns a full result dict.
+    """
+    img = Image.open(image_path).convert('RGB')
+    img.thumbnail((320, 320))          # small = fast and memory-safe
+    w, h = img.size
+    pixels = list(img.getdata())
+    total  = len(pixels)
+    if total == 0:
+        return _no_fire_result()
 
-    if severity == 'Tiny':
-        water = random.uniform(5, 20)
-        conf  = random.randint(65, 75)
-    elif severity == 'Small':
-        water = random.uniform(550, 1100)
-        conf  = random.randint(70, 82)
-    elif severity == 'Medium':
-        water = random.uniform(2200, 5500)
-        conf  = random.randint(78, 88)
+    # ── Stage 1-3: Pixel-level gate ──────────────────────────────────────────
+    fire_pixels = 0
+    bright_pixels = 0
+    sat_vals = []
+
+    for r, g, b in pixels:
+        hue, sat, val = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+
+        # Stage 1: Hue must be in the FLAME zone 0.03–0.15 (≈ 11°–54° orange)
+        #          Explicitly excludes deep red (sunsets ≈ 0.95-1.0) and yellow (0.17+)
+        if not (0.03 <= hue <= 0.15):
+            continue
+
+        # Stage 2: Must be bright (dark orange pixels are just shadow / rust)
+        if val < 0.72:
+            continue
+
+        # Stage 3: Red must dominate AND green must beat blue (fire colour chain)
+        if not (r > g * 1.15 and g > b + 5):
+            continue
+
+        # Passed all gates — count it
+        fire_pixels += 1
+        sat_vals.append(sat)
+        if val > 0.88:
+            bright_pixels += 1
+
+    ratio = fire_pixels / total
+
+    # ── Stage 4: Saturation Variance (reject the sun / solid objects) ────────
+    is_chaotic = False
+    s_variance  = 0.0
+
+    if fire_pixels >= 15 and sat_vals:
+        avg_s    = sum(sat_vals) / len(sat_vals)
+        s_variance = sum((s - avg_s) ** 2 for s in sat_vals) / len(sat_vals)
+
+        # Real fire: chaotic mix of saturation values → HIGH variance (> 0.012)
+        # Sun disc / red wall: very uniform saturation → LOW variance (< 0.012)
+        if s_variance > 0.012:
+            is_chaotic = True
+
+    # ── Stage 5: Edge-Texture Proxy ──────────────────────────────────────────
+    # Sample neighbouring pixel pairs. Fire has MANY colour transitions.
+    # A solid red/orange object has very FEW transitions.
+    edge_count: int = 0
+    edge_samples: int = 0
+    for y in range(0, h - 1, 3):
+        for x in range(0, w - 1, 3):
+            r1, g1, b1 = img.getpixel((x, y))
+            r2, g2, b2 = img.getpixel((x + 1, y))
+            diff = abs(int(r1) - int(r2)) + abs(int(g1) - int(g2)) + abs(int(b1) - int(b2))
+            if diff > 25:
+                edge_count += 1
+            edge_samples += 1
+
+    edge_ratio: float = edge_count / edge_samples if edge_samples > 0 else 0.0
+
+    # Fire: high edge ratio (>0.30). Solid object / sky: low edge ratio (<0.15)
+    has_texture = edge_ratio > 0.22
+
+    # ── Final Decision ────────────────────────────────────────────────────────
+    fire_detected = (
+        ratio > 0.007          and   # Enough fire-coloured pixels
+        is_chaotic             and   # Colour is NOT uniform (not the sun)
+        has_texture                  # Image has texture (not a solid block)
+    )
+
+    if not fire_detected:
+        return _no_fire_result(confidence=float(min(99, int(70 + ratio * 200))))
+
+    return _build_fire_result(ratio, bright_pixels, total)
+
+
+def _build_fire_result(ratio, bright_pixels, total):
+    bright_ratio = bright_pixels / total if total > 0 else 0
+
+    if ratio < 0.02:
+        severity = 'Tiny';  water_min, water_max = 5, 20;       conf = 68
+    elif ratio < 0.08:
+        severity = 'Small'; water_min, water_max = 550, 1100;   conf = 75
+    elif ratio < 0.22:
+        severity = 'Medium';water_min, water_max = 2200, 5500;  conf = 82
     else:
-        water = random.uniform(11000, 18000)
-        conf  = random.randint(82, 93)
+        severity = 'Large'; water_min, water_max = 11000, 18000;conf = 89
 
-    ratio = {'Tiny': 0.01, 'Small': 0.05, 'Medium': 0.15, 'Large': 0.35}[severity]
-    return _build_result(severity, water * 1.10, conf, fire_detected=True,
-                         bbox={'x': 80, 'y': 60, 'width': 240, 'height': 200},
-                         ratio=ratio)
+    # Bump confidence if many bright-white pixels (intense flame cores)
+    if bright_ratio > 0.03:
+        conf = min(97, int(conf) + 6)
 
+    water = random.uniform(water_min, water_max) * 1.10
 
-def _build_result(severity, water_liters, confidence, fire_detected, bbox, ratio) -> dict:
-    """Construct the final analysis response."""
     equipment_map = {
-        'Tiny':  {
-            'primary': 'Bucket of Water / Wet Blanket',
-            'type': 'Domestic Items',
-            'units': '1 person',
-            'crew': 'Civilian',
-            'response_time': 'Immediate'
-        },
-        'Small':  {
-            'primary': 'Portable Fire Extinguisher',
-            'type': 'CO₂ / Dry Powder / Foam',
-            'units': '2–3 extinguishers',
-            'crew': '2 personnel',
-            'response_time': '< 5 minutes'
-        },
-        'Medium': {
-            'primary': 'Hose Reel + Multiple Extinguishers',
-            'type': 'High-pressure water hose + foam',
-            'units': '1 fire tender + 4 extinguishers',
-            'crew': '6–8 personnel',
-            'response_time': '5–10 minutes'
-        },
-        'Large':  {
-            'primary': 'Fire Truck + Backup Units',
-            'type': 'High-volume water tanker + aerial ladder',
-            'units': '2+ fire trucks + support vehicles',
-            'crew': '15–25 personnel',
-            'response_time': 'Call for immediate backup'
-        },
+        'Tiny':  {'primary':'Bucket / Wet Blanket','type':'Domestic','units':'1 person','crew':'Civilian','response_time':'Immediate'},
+        'Small': {'primary':'Portable Extinguisher','type':'CO₂/Dry Powder','units':'2-3 units','crew':'2 personnel','response_time':'< 5 min'},
+        'Medium':{'primary':'Hose Reel + Extinguishers','type':'High-pressure water+foam','units':'1 tender+4 ext','crew':'6-8 personnel','response_time':'5-10 min'},
+        'Large': {'primary':'Fire Truck + Backup','type':'High-vol tanker+aerial','units':'2+ trucks','crew':'15-25 personnel','response_time':'Call for backup'},
     }
-
-    severity_colors = {
-        'Tiny': '#3B82F6',
-        'Small': '#22C55E',
-        'Medium': '#F59E0B',
-        'Large': '#EF4444'
-    }
-
     tips_map = {
-        'Tiny': [
-            'Do not panic. This is a very small fire.',
-            'Ensure it is not an electrical or oil fire before using water.',
-            'Smother it with a wet blanket or use a domestic fire extinguisher.',
-            'If it grows unexpectedly, evacuate and report it immediately.'
-        ],
-        'Small': [
-            'Evacuate the immediate area immediately',
-            'Use appropriate extinguisher if trained',
-            'Do NOT use water on electrical fires',
-            'Keep exits clear for responders',
-            'Call emergency services: 101'
-        ],
-        'Medium': [
-            'Evacuate the entire floor/section NOW',
-            'Do NOT attempt to fight the fire yourself',
-            'Pull fire alarms to alert everyone',
-            'Close doors to slow fire spread',
-            'Proceed to assembly points',
-            'Call emergency services: 101'
-        ],
-        'Large': [
-            '🚨 EVACUATE THE ENTIRE BUILDING IMMEDIATELY',
-            'Do NOT re-enter under any circumstances',
-            'Warn neighbors and bystanders',
-            'Stay low if smoke is present',
-            'Meet at designated safe assembly point',
-            'Call emergency services: 101 — multiple units needed'
-        ]
+        'Tiny': ['Do not panic — very small fire.','Use wet blanket or domestic extinguisher.','Evacuate if it spreads.'],
+        'Small':['Evacuate the area now.','Use an extinguisher only if trained.','Do NOT use water on electrical fires.','Call 101.'],
+        'Medium':['Evacuate the entire floor NOW.','Pull fire alarms.','Close doors to slow spread.','Call 101 immediately.'],
+        'Large':['🚨 EVACUATE IMMEDIATELY — do NOT re-enter.','Warn neighbours.','Stay low in smoke.','Call 101 — multiple units needed.'],
     }
+    colors = {'Tiny':'#3B82F6','Small':'#22C55E','Medium':'#F59E0B','Large':'#EF4444'}
 
     return {
-        'fire_detected': fire_detected,
-        'severity': severity,
-        'severity_color': severity_colors[severity],
-        'confidence': confidence,
+        'fire_detected':    True,
+        'severity':         severity,
+        'severity_color':   colors[severity],
+        'confidence':       conf,
         'fire_pixel_ratio': round(ratio * 100, 1),
-        'water_liters': round(water_liters, 0),
-        'water_display': f"{water_liters:,.0f} L (incl. 10% safety buffer)",
-        'equipment': equipment_map[severity],
-        'safety_tips': tips_map[severity],
-        'bounding_box': bbox,
-        'analyzed_at': __import__('datetime').datetime.utcnow().isoformat()
+        'water_liters':     round(water, 0),
+        'water_display':    f"{water:,.0f} L (incl. 10% safety buffer)",
+        'equipment':        equipment_map[severity],
+        'safety_tips':      tips_map[severity],
+        'bounding_box':     None,
+        'analyzed_at':      __import__('datetime').datetime.utcnow().isoformat(),
+    }
+
+
+def _no_fire_result(confidence=95.0):
+    return {
+        'fire_detected':    False,
+        'severity':         'None',
+        'severity_color':   '#9CA3AF',
+        'confidence':       round(confidence, 1),
+        'fire_pixel_ratio': 0.0,
+        'water_liters':     0,
+        'water_display':    '0 L',
+        'equipment':        None,
+        'safety_tips':      [
+            'No fire detected in the image.',
+            'Make sure the image clearly shows the fire area.',
+            'You can still report manually if needed.',
+        ],
+        'bounding_box':     None,
+        'analyzed_at':      __import__('datetime').datetime.utcnow().isoformat(),
     }

@@ -441,7 +441,24 @@ async function submitReport() {
     document.getElementById('suc-dist').textContent = `${data.distance_km} km away · 📞 ${data.office_contact || '101'}`;
     document.getElementById('suc-detail').innerHTML = `<strong>Your report has been successfully submitted to the nearest Fire Station.</strong><br/><br/>Their firefighters have been notified and will be responding shortly.`;
     document.getElementById('success-screen').classList.add('show');
-    showToast(`Successfully submitted to ${data.office_name}!`, 'success');
+    showToast(`🚒 Report submitted to ${data.office_name}! Help is on the way.`, 'success');
+
+    // Browser Push Notification
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('🔥 Fire Report Submitted!', {
+        body: `Your report was sent to ${data.office_name} — ${data.distance_km} km away.\n📞 ${data.office_contact || '101'}`,
+        icon: '/static/icons/icon-192.png',
+      });
+    } else if ('Notification' in window && Notification.permission !== 'denied') {
+      Notification.requestPermission().then(perm => {
+        if (perm === 'granted') {
+          new Notification('🔥 Fire Report Submitted!', {
+            body: `Your report was sent to ${data.office_name}. Help is on the way!`,
+            icon: '/static/icons/icon-192.png',
+          });
+        }
+      });
+    }
   } catch(err) {
     showToast('Error: ' + err.message, 'error');
     btn.disabled = false;
