@@ -4,10 +4,11 @@
           registration reliability, dashboard caller info
 ═══════════════════════════════════════════════════════ */
 
-const API = (window.location.protocol === 'file:') ? 'http://localhost:5000' : '';
+// Determine API base URL correctly even if running via Live Server (port 5500)
+const IS_LOCAL = ['localhost','127.0.0.1'].includes(window.location.hostname) || window.location.protocol === 'file:';
+const API = IS_LOCAL ? 'http://localhost:5000' : '';
 
 // ─── Server Wake-Up (only on cloud — skipped on localhost) ───────────────────
-const IS_LOCAL = ['localhost','127.0.0.1'].includes(window.location.hostname);
 let serverReady = IS_LOCAL; // treat localhost as always-ready
 
 async function pingServer() {
@@ -489,11 +490,20 @@ async function submitReport() {
   if (window.lastAnalysisData) fd.append('analysis_data', window.lastAnalysisData);
 
   try {
-    const res = await fetchWithRetry(API + '/api/reports', { method:'POST', body: fd });
+    // Use plain fetch (no retry) — report is a one-shot action, not a network ping
+    let res;
+    try {
+      res = await fetch(API + '/api/reports', { method: 'POST', body: fd });
+    } catch (netErr) {
+      throw new Error('Cannot reach server. Please check your internet and try again.');
+    }
+
     const text = await res.text();
     let data = {};
-    try { data = JSON.parse(text); } catch(e) { throw new Error(text ? `Server Error: ${text.substring(0, 100)}` : "Empty response from server"); }
-    if (!res.ok) throw new Error(data.error || 'Failed to send report');
+    try { data = JSON.parse(text); } catch(e) {
+      throw new Error(text ? `Server error ${res.status}: ${text.substring(0, 120)}` : `Server returned empty response (Status: ${res.status} ${res.statusText}).`);
+    }
+    if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
 
     // Show success screen
     document.getElementById('suc-station').textContent = `Alerted: ${data.office_name}`;

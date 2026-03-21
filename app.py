@@ -29,6 +29,22 @@ CORS(app)
 jwt = JWTManager(app)
 limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "100 per hour"])
 
+# ── Global Error Handlers (always return JSON — never empty response) ──────────
+@app.errorhandler(Exception)
+def handle_any_exception(e):
+    import traceback
+    traceback.print_exc()
+    return jsonify({'error': f'Internal server error: {str(e)}'}), 500
+
+@app.errorhandler(429)
+def handle_rate_limit(e):
+    return jsonify({'error': 'Too many requests. Please wait a moment and try again.'}), 429
+
+@app.errorhandler(404)
+def handle_not_found(e):
+    return jsonify({'error': 'Endpoint not found'}), 404
+
+
 DB_PATH = 'database.db'
 
 # Ensure upload directory exists
