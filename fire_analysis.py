@@ -46,9 +46,12 @@ def _analyze_with_hybrid(image_path: str) -> dict:
             # Hot-load the YOLO model if the user didn't restart the server after training!
             MODEL_PATH = os.path.join(os.path.dirname(__file__), 'yolo_fire_model.pt')
             if os.path.exists(MODEL_PATH):
-                from ultralytics import YOLO
-                ML_MODEL = YOLO(MODEL_PATH)
-                print("🔥 Dynamically Hot-Swapped YOLO Model into memory!")
+                try:
+                    from ultralytics import YOLO
+                    ML_MODEL = YOLO(MODEL_PATH)
+                    print("🔥 Dynamically Hot-Swapped YOLO Model into memory!")
+                except ImportError:
+                    print("⚙️ Render Cloud Notice: Missing ultralytics, gracefully falling back to Color Engine!")
 
         # 1. Machine Learning Classification (If Trained via YOLO dataset)
         ml_fire_prob = None
