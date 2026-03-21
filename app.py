@@ -153,6 +153,11 @@ def register_page():
 def dashboard_page():
     return send_from_directory('static', 'index.html')
 
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Lightweight ping endpoint to wake the Render server up."""
+    return jsonify({'status': 'ok', 'server': 'FireSense'}), 200
+
 # ─────────────────────────────────────────────
 #  Auth Endpoints
 # ─────────────────────────────────────────────

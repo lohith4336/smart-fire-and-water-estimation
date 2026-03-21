@@ -4,11 +4,63 @@
           registration reliability, dashboard caller info
 ═══════════════════════════════════════════════════════ */
 
-let API = '';
-if (window.location.protocol === 'file:') {
-  API = 'http://localhost:5000';
+const API = (window.location.protocol === 'file:') ? 'http://localhost:5000' : '';
+
+// ─── Server Wake-Up (Render free tier sleeps after inactivity) ───────────────
+let serverReady = false;
+
+async function pingServer() {
+  try {
+    const res = await fetchWithRetry(API + '/api/health', { signal: AbortSignal.timeout(8000) });
+    if (res.ok) {
+      serverReady = true;
+      const banner = document.getElementById('server-wake-banner');
+      if (banner) banner.style.display = 'none';
+      return true;
+    }
+  } catch (e) {}
+  return false;
 }
-// For regular web deployment, API should stay '' to use relative paths correctly.
+
+async function ensureServerReady() {
+  if (serverReady) return true;
+  const ok = await pingServer();
+  if (ok) return true;
+  // Show wake-up banner
+  let banner = document.getElementById('server-wake-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'server-wake-banner';
+    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#FF4500;color:white;text-align:center;padding:10px 16px;font-size:14px;font-family:Inter,sans-serif;font-weight:600;';
+    banner.innerHTML = '⏳ Server is waking up (Render free tier). Please wait 30 seconds and try again…';
+    document.body.prepend(banner);
+  }
+  banner.style.display = 'block';
+  // Retry every 5 seconds silently
+  return new Promise(resolve => {
+    const iv = setInterval(async () => {
+      const ready = await pingServer();
+      if (ready) { clearInterval(iv); resolve(true); }
+    }, 5000);
+  });
+}
+
+// ─── Fetch with Auto-Retry ────────────────────────────────────────────────────
+async function fetchWithRetry(url, opts = {}, retries = 2) {
+  await ensureServerReady();
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fetch(url, opts);
+    } catch (err) {
+      if (i === retries) throw err;
+      await new Promise(r => setTimeout(r, 3000));
+    }
+  }
+}
+
+// Wake the server immediately on page load
+pingServer();
+
 
 // ─── Page Router ─────────────────────────────────────
 let regMap = null, regMarker = null;
@@ -212,7 +264,7 @@ async function useMedia() {
   if (selectedVideo) fd.append('video', selectedVideo);
 
   try {
-    const res = await fetch(API + '/api/analyze-media', { method: 'POST', body: fd });
+    const res = await fetchWithRetry(API + '/api/analyze-media', { method: 'POST', body: fd });
     const text = await res.text();
     let data = {};
     try { data = JSON.parse(text); } catch(e) { throw new Error(text ? `Server Error: ${text.substring(0, 100)}` : "Empty response from server"); }
@@ -363,7 +415,7 @@ function initCitizenMap() {
 
 async function loadOfficesOnMap() {
   try {
-    const res = await fetch(API + '/api/offices');
+    const res = await fetchWithRetry(API + '/api/offices');
     if (!res.ok) throw new Error();
     allOffices = await res.json();
     officeMarkers.forEach(m => citizenMap.removeLayer(m)); officeMarkers = [];
@@ -383,7 +435,7 @@ async function loadOfficesOnMap() {
 async function fetchNearest() {
   if (!userLat || !userLng) return;
   try {
-    const res = await fetch(`${API}/api/offices/nearest?lat=${userLat}&lng=${userLng}`);
+    const res = await fetchWithRetry(`${API}/api/offices/nearest?lat=${userLat}&lng=${userLng}`);
     nearestOffice = await res.json();
     if (nearestOffice?.lat) {
       const pill = document.getElementById('nearest-pill');
@@ -430,7 +482,7 @@ async function submitReport() {
   if (window.lastAnalysisData) fd.append('analysis_data', window.lastAnalysisData);
 
   try {
-    const res = await fetch(API + '/api/reports', { method:'POST', body: fd });
+    const res = await fetchWithRetry(API + '/api/reports', { method:'POST', body: fd });
     const text = await res.text();
     let data = {};
     try { data = JSON.parse(text); } catch(e) { throw new Error(text ? `Server Error: ${text.substring(0, 100)}` : "Empty response from server"); }
@@ -494,7 +546,7 @@ async function handleLogin(e) {
   btn.disabled = true; btn.textContent = '⏳ Logging in...';
   err.classList.add('hidden');
   try {
-    const res = await fetch(API + '/api/auth/login', {
+    const res = await fetchWithRetry(API + '/api/auth/login', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         name: document.getElementById('login-name').value.trim(),
@@ -594,7 +646,7 @@ if (regAddressInput) {
     
     addressSearchTimeout = setTimeout(async () => {
       try {
-        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&countrycodes=in&limit=1`);
+        const res = await fetchWithRetry(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&countrycodes=in&limit=1`);
         const data = await res.json();
         if (data && data.length > 0 && regMap) {
           const lat = parseFloat(data[0].lat);
@@ -637,7 +689,7 @@ async function handleRegister(e) {
   btn.disabled = true; btn.textContent = '⏳ Registering...';
 
   try {
-    const res = await fetch(API + '/api/auth/register', {
+    const res = await fetchWithRetry(API + '/api/auth/register', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({
@@ -712,7 +764,7 @@ async function loadReports() {
   if (severity !== 'All') url += `severity=${severity}&`;
   if (date)              url += `date=${date}&`;
   try {
-    const res = await fetch(url, { headers: authHeaders() });
+    const res = await fetchWithRetry(url, { headers: authHeaders() });
     if (res.status === 401) { logout(); return; }
     allReports = await res.json();
     renderReportList(allReports);
@@ -722,7 +774,7 @@ async function loadReports() {
 
 async function loadStats() {
   try {
-    const res = await fetch(API + '/api/reports/stats', { headers: authHeaders() });
+    const res = await fetchWithRetry(API + '/api/reports/stats', { headers: authHeaders() });
     if (!res.ok) return;
     const d = await res.json();
     document.getElementById('stat-total').textContent      = d.total;
@@ -921,7 +973,7 @@ async function runAnalysis(rid) {
   const btn = document.getElementById('btn-analyze');
   if(btn){ btn.disabled=true; btn.textContent='⏳ Analyzing...'; }
   try {
-    const res = await fetch(`${API}/api/reports/${rid}/analyze`,{method:'POST',headers:authHeaders()});
+    const res = await fetchWithRetry(`${API}/api/reports/${rid}/analyze`,{method:'POST',headers:authHeaders()});
     const data = await res.json();
     if(!res.ok) throw new Error(data.error||'Failed');
     const idx = allReports.findIndex(r => r.id===rid);
@@ -969,7 +1021,7 @@ async function saveNotes(rid) {
 async function deleteReport(rid) {
   if (!confirm('Are you sure you want to delete this report? This action cannot be undone.')) return;
   try {
-    const res = await fetch(`${API}/api/reports/${rid}`, { method:'DELETE', headers:authHeaders() });
+    const res = await fetchWithRetry(`${API}/api/reports/${rid}`, { method:'DELETE', headers:authHeaders() });
     if (!res.ok) throw new Error('Failed to delete');
     showToast('Report deleted successfully', 'success');
     allReports = allReports.filter(r => r.id !== rid);
