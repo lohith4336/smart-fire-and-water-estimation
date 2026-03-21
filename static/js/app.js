@@ -7,9 +7,8 @@
 let API = '';
 if (window.location.protocol === 'file:') {
   API = 'http://localhost:5000';
-} else if (window.location.port !== '5000' && window.location.port !== '') {
-  API = window.location.protocol + '//' + window.location.hostname + ':5000';
 }
+// For regular web deployment, API should stay '' to use relative paths correctly.
 
 // ─── Page Router ─────────────────────────────────────
 let regMap = null, regMarker = null;

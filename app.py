@@ -257,7 +257,7 @@ def api_submit_report():
     # Find nearest office
     office = nearest_office(citizen_lat, citizen_lng)
     if not office:
-        return jsonify({'error': 'No fire office found'}), 500
+        return jsonify({'error': 'No fire offices are registered yet. Reports cannot be sent.'}), 404
 
     report_id = str(uuid.uuid4())
     image_path = None
