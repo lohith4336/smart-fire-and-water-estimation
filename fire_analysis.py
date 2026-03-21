@@ -1,11 +1,8 @@
-"""
-fire_analysis.py — Smart fire detection via image color analysis.
-Crash-proof cloud version. Strict fire-only detection (rejects sun/red objects).
-"""
 import os
 import math
 import random
 import traceback
+import datetime  # Imported explicitly to fix the deprecated inline call
 
 try:
     from PIL import Image
@@ -33,10 +30,16 @@ if not IS_CLOUD:
 
 def analyze_fire_image(image_path):
     """
-    Main entry point.  Always returns a complete dict — never crashes.
+    Main entry point. Always returns a complete dict — never crashes.
     """
     try:
         if image_path and os.path.exists(image_path) and PIL_AVAILABLE:
+            
+            # Note: ML_MODEL is available here if you want to run it before CV.
+            # Example: 
+            # if ML_MODEL: 
+            #     results = ML_MODEL.predict(image_path)
+            
             return _analyze_cv(image_path)
     except Exception:
         traceback.print_exc()
@@ -71,15 +74,14 @@ def _analyze_cv(image_path):
         hue, sat, val = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
 
         # Stage 1: Hue must be in the FLAME zone 0.03–0.15 (≈ 11°–54° orange)
-        #          Explicitly excludes deep red (sunsets ≈ 0.95-1.0) and yellow (0.17+)
         if not (0.03 <= hue <= 0.15):
             continue
 
-        # Stage 2: Must be bright (dark orange pixels are just shadow / rust)
+        # Stage 2: Must be bright
         if val < 0.72:
             continue
 
-        # Stage 3: Red must dominate AND green must beat blue (fire colour chain)
+        # Stage 3: Red must dominate AND green must beat blue
         if not (r > g * 1.15 and g > b + 5):
             continue
 
@@ -99,14 +101,10 @@ def _analyze_cv(image_path):
         avg_s    = sum(sat_vals) / len(sat_vals)
         s_variance = sum((s - avg_s) ** 2 for s in sat_vals) / len(sat_vals)
 
-        # Real fire: chaotic mix of saturation values → HIGH variance (> 0.012)
-        # Sun disc / red wall: very uniform saturation → LOW variance (< 0.012)
         if s_variance > 0.012:
             is_chaotic = True
 
     # ── Stage 5: Edge-Texture Proxy ──────────────────────────────────────────
-    # Sample neighbouring pixel pairs. Fire has MANY colour transitions.
-    # A solid red/orange object has very FEW transitions.
     edge_count: int = 0
     edge_samples: int = 0
     for y in range(0, h - 1, 3):
@@ -119,8 +117,6 @@ def _analyze_cv(image_path):
             edge_samples += 1
 
     edge_ratio: float = edge_count / edge_samples if edge_samples > 0 else 0.0
-
-    # Fire: high edge ratio (>0.30). Solid object / sky: low edge ratio (<0.15)
     has_texture = edge_ratio > 0.22
 
     # ── Final Decision ────────────────────────────────────────────────────────
@@ -148,7 +144,6 @@ def _build_fire_result(ratio, bright_pixels, total):
     else:
         severity = 'Large'; water_min, water_max = 11000, 18000;conf = 89
 
-    # Bump confidence if many bright-white pixels (intense flame cores)
     if bright_ratio > 0.03:
         conf = min(97, int(conf) + 6)
 
@@ -179,7 +174,7 @@ def _build_fire_result(ratio, bright_pixels, total):
         'equipment':        equipment_map[severity],
         'safety_tips':      tips_map[severity],
         'bounding_box':     None,
-        'analyzed_at':      __import__('datetime').datetime.utcnow().isoformat(),
+        'analyzed_at':      datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
 
 
@@ -199,5 +194,5 @@ def _no_fire_result(confidence=95.0):
             'You can still report manually if needed.',
         ],
         'bounding_box':     None,
-        'analyzed_at':      __import__('datetime').datetime.utcnow().isoformat(),
+        'analyzed_at':      datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
