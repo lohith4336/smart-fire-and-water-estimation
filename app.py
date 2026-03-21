@@ -250,121 +250,120 @@ def api_nearest():
 @app.route('/api/reports', methods=['POST'])
 @limiter.limit("50 per hour")
 def api_submit_report():
-    citizen_lat = request.form.get('lat')
-    citizen_lng = request.form.get('lng')
-    address_hint = request.form.get('address', '')
-    citizen_name  = request.form.get('citizen_name', '').strip()
-    citizen_phone = request.form.get('citizen_phone', '').strip()
+    try:
+        import traceback
+        citizen_lat = request.form.get('lat')
+        citizen_lng = request.form.get('lng')
+        address_hint = request.form.get('address', '')
+        citizen_name  = request.form.get('citizen_name', '').strip()
+        citizen_phone = request.form.get('citizen_phone', '').strip()
 
-    if not citizen_lat or not citizen_lng:
-        return jsonify({'error': 'Location required'}), 400
+        if not citizen_lat or not citizen_lng:
+            return jsonify({'error': 'Location required'}), 400
 
-    citizen_lat = float(citizen_lat)
-    citizen_lng = float(citizen_lng)
+        citizen_lat = float(citizen_lat)
+        citizen_lng = float(citizen_lng)
 
-    # Find nearest office
-    office = nearest_office(citizen_lat, citizen_lng)
-    if not office:
-        return jsonify({'error': 'No fire offices are registered yet. Reports cannot be sent.'}), 404
+        # Find nearest office
+        office = nearest_office(citizen_lat, citizen_lng)
+        if not office:
+            return jsonify({'error': 'No fire station is registered yet. Please ask your local fire station to register first.'}), 404
 
-    report_id = str(uuid.uuid4())
-    image_path = None
-    video_path = None
+        report_id = str(uuid.uuid4())
+        image_path = None
+        video_path = None
 
-    # Handle image upload — accept files with or without extension (camera blobs)
-    if 'image' in request.files:
-        f = request.files['image']
-        if f:
-            # Determine extension from content-type or filename
-            mime_map = {'image/jpeg':'jpg','image/png':'png','image/webp':'webp','image/gif':'gif'}
-            ext = None
-            if f.content_type in mime_map:
-                ext = mime_map[f.content_type]
-            elif f.filename and '.' in f.filename:
-                candidate = f.filename.rsplit('.',1)[1].lower()
-                if candidate in {'png','jpg','jpeg','gif','webp'}:
-                    ext = candidate if candidate != 'jpeg' else 'jpg'
-            if ext:
-                fname = f'{report_id}_img.{ext}'
-                os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-                f.save(os.path.join(app.config['UPLOAD_FOLDER'], fname))
-                image_path = f'uploads/{fname}'
+        # Handle image upload
+        if 'image' in request.files:
+            f = request.files['image']
+            if f and f.filename:
+                mime_map = {'image/jpeg':'jpg','image/png':'png','image/webp':'webp','image/gif':'gif'}
+                ext = mime_map.get(f.content_type)
+                if not ext and '.' in (f.filename or ''):
+                    cand = f.filename.rsplit('.',1)[1].lower()
+                    ext = cand if cand in {'png','jpg','jpeg','gif','webp'} else None
+                    if ext == 'jpeg': ext = 'jpg'
+                if ext:
+                    fname = f'{report_id}_img.{ext}'
+                    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+                    f.save(os.path.join(app.config['UPLOAD_FOLDER'], fname))
+                    image_path = f'uploads/{fname}'
 
-    # Handle video upload
-    if 'video' in request.files:
-        f = request.files['video']
-        if f:
-            mime_map_v = {'video/webm':'webm','video/mp4':'mp4','video/quicktime':'mov','video/avi':'avi'}
-            ext = None
-            if f.content_type in mime_map_v:
-                ext = mime_map_v[f.content_type]
-            elif f.filename and '.' in f.filename:
-                candidate = f.filename.rsplit('.',1)[1].lower()
-                if candidate in {'mp4','webm','mov','avi'}:
-                    ext = candidate
-            if ext:
-                fname = f'{report_id}_vid.{ext}'
-                os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-                f.save(os.path.join(app.config['UPLOAD_FOLDER'], fname))
-                video_path = f'uploads/{fname}'
+        # Handle video upload
+        if 'video' in request.files:
+            f = request.files['video']
+            if f and f.filename:
+                mime_map_v = {'video/webm':'webm','video/mp4':'mp4','video/quicktime':'mov'}
+                ext = mime_map_v.get(f.content_type)
+                if not ext and '.' in (f.filename or ''):
+                    cand = f.filename.rsplit('.',1)[1].lower()
+                    ext = cand if cand in {'mp4','webm','mov','avi'} else None
+                if ext:
+                    fname = f'{report_id}_vid.{ext}'
+                    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+                    f.save(os.path.join(app.config['UPLOAD_FOLDER'], fname))
+                    video_path = f'uploads/{fname}'
 
-    submitted_at = datetime.utcnow().isoformat()
+        submitted_at = datetime.utcnow().isoformat()
 
-    # Automatic Analysis 
-    analysis_data_str = request.form.get('analysis_data')
-    if analysis_data_str:
+        # Run fire analysis (always safe, never raises)
         try:
-            result = json.loads(analysis_data_str)
-        except:
-            result = analyze_fire_image(os.path.join('static', image_path) if image_path else None)
-    else:
-        result = analyze_fire_image(os.path.join('static', image_path) if image_path else None)
-    
-    severity = result.get('severity')
-    water_liters = result.get('water_liters')
-    equipment = json.dumps(result.get('equipment')) if result.get('equipment') else None
-    confidence = result.get('confidence')
-    fire_pixel_ratio = result.get('fire_pixel_ratio')
-    bounding_box = json.dumps(result.get('bounding_box')) if result.get('bounding_box') else None
-    analysis_done = 1
+            analysis_data_str = request.form.get('analysis_data')
+            if analysis_data_str:
+                result = json.loads(analysis_data_str)
+            else:
+                full_img_path = os.path.join('static', image_path) if image_path else None
+                result = analyze_fire_image(full_img_path)
+        except Exception:
+            result = {'severity': None, 'water_liters': None, 'equipment': None,
+                      'confidence': None, 'fire_pixel_ratio': None, 'bounding_box': None,
+                      'safety_tips': []}
 
-    with get_db() as conn:
-        conn.execute(
-            """INSERT INTO reports
-               (id,office_id,citizen_lat,citizen_lng,address_hint,image_path,video_path,
-                submitted_at,status,citizen_name,citizen_phone,
-                severity,water_liters,equipment,confidence,fire_pixel_ratio,bounding_box,analysis_done)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (report_id, office['id'], citizen_lat, citizen_lng,
-             address_hint, image_path, video_path, submitted_at, 'Pending',
-             citizen_name, citizen_phone, severity, water_liters, equipment, confidence, fire_pixel_ratio, bounding_box, analysis_done)
-        )
+        severity         = result.get('severity')
+        water_liters     = result.get('water_liters')
+        equipment        = json.dumps(result.get('equipment')) if result.get('equipment') else None
+        confidence       = result.get('confidence')
+        fire_pixel_ratio = result.get('fire_pixel_ratio')
+        bounding_box     = json.dumps(result.get('bounding_box')) if result.get('bounding_box') else None
 
-    # Push SSE notification (we can include severity to UI)
-    push_sse(office['id'], {
-        'type': 'new_report',
-        'report_id': report_id,
-        'submitted_at': submitted_at,
-        'citizen_lat': citizen_lat,
-        'citizen_lng': citizen_lng,
-        'address_hint': address_hint,
-        'image_path': image_path,
-        'office_name': office['name'],
-        'citizen_name': citizen_name,
-        'citizen_phone': citizen_phone,
-        'severity': severity
-    })
+        with get_db() as conn:
+            conn.execute(
+                """INSERT INTO reports
+                   (id,office_id,citizen_lat,citizen_lng,address_hint,image_path,video_path,
+                    submitted_at,status,citizen_name,citizen_phone,
+                    severity,water_liters,equipment,confidence,fire_pixel_ratio,bounding_box,analysis_done)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (report_id, office['id'], citizen_lat, citizen_lng,
+                 address_hint, image_path, video_path, submitted_at, 'Pending',
+                 citizen_name, citizen_phone, severity, water_liters, equipment,
+                 confidence, fire_pixel_ratio, bounding_box, 1)
+            )
 
-    return jsonify({
-        'message': f"Your report has been sent to {office['name']} — they have been alerted.",
-        'office_name': office['name'],
-        'office_contact': office['contact'],
-        'report_id': report_id,
-        'distance_km': round(haversine(citizen_lat, citizen_lng, office['lat'], office['lng']), 2),
-        'severity': severity,
-        'water_liters': water_liters,
-        'safety_tips': result.get('safety_tips')
-    }), 201
+        # SSE live push
+        push_sse(office['id'], {
+            'type': 'new_report', 'report_id': report_id,
+            'submitted_at': submitted_at, 'citizen_lat': citizen_lat,
+            'citizen_lng': citizen_lng, 'address_hint': address_hint,
+            'image_path': image_path, 'office_name': office['name'],
+            'citizen_name': citizen_name, 'citizen_phone': citizen_phone,
+            'severity': severity
+        })
+
+        return jsonify({
+            'message': f"Report sent to {office['name']} — they have been alerted.",
+            'office_name': office['name'],
+            'office_contact': office['contact'],
+            'report_id': report_id,
+            'distance_km': round(haversine(citizen_lat, citizen_lng, office['lat'], office['lng']), 2),
+            'severity': severity,
+            'water_liters': water_liters,
+            'safety_tips': result.get('safety_tips', [])
+        }), 201
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 @app.route('/api/analyze', methods=['POST'])
 def api_citizen_analyze():
