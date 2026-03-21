@@ -82,6 +82,9 @@ def _analyze_with_hybrid(image_path: str) -> dict:
         total = len(pixels)
 
         # --- ADVANCED STRUCTURAL SCAN ---
+        fire_pixels = 0
+        bright_fire = 0
+        medium_fire = 0
         fire_pixel_coords = []
         import colorsys
         
