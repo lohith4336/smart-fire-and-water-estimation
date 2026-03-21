@@ -93,6 +93,14 @@ def init_db():
             conn.execute("ALTER TABLE reports ADD COLUMN fire_pixel_ratio REAL")
         if 'bounding_box' not in cols:
             conn.execute("ALTER TABLE reports ADD COLUMN bounding_box TEXT")
+        if 'severity' not in cols:
+            conn.execute("ALTER TABLE reports ADD COLUMN severity TEXT")
+        if 'water_liters' not in cols:
+            conn.execute("ALTER TABLE reports ADD COLUMN water_liters REAL")
+        if 'equipment' not in cols:
+            conn.execute("ALTER TABLE reports ADD COLUMN equipment TEXT")
+        if 'analysis_done' not in cols:
+            conn.execute("ALTER TABLE reports ADD COLUMN analysis_done INTEGER DEFAULT 0")
 
 init_db()  # Initialize DB on import for Gunicorn/Render compatibility
 # Database schema is ready. Users must now register fire stations manually.
