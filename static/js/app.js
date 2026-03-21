@@ -6,12 +6,17 @@
 
 const API = (window.location.protocol === 'file:') ? 'http://localhost:5000' : '';
 
-// ─── Server Wake-Up (Render free tier sleeps after inactivity) ───────────────
-let serverReady = false;
+// ─── Server Wake-Up (only on cloud — skipped on localhost) ───────────────────
+const IS_LOCAL = ['localhost','127.0.0.1'].includes(window.location.hostname);
+let serverReady = IS_LOCAL; // treat localhost as always-ready
 
 async function pingServer() {
+  if (IS_LOCAL) return true;
   try {
-    const res = await fetchWithRetry(API + '/api/health', { signal: AbortSignal.timeout(8000) });
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(API + '/api/health', { signal: controller.signal });
+    clearTimeout(tid);
     if (res.ok) {
       serverReady = true;
       const banner = document.getElementById('server-wake-banner');
@@ -26,23 +31,25 @@ async function ensureServerReady() {
   if (serverReady) return true;
   const ok = await pingServer();
   if (ok) return true;
-  // Show wake-up banner
-  let banner = document.getElementById('server-wake-banner');
-  if (!banner) {
-    banner = document.createElement('div');
-    banner.id = 'server-wake-banner';
-    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#FF4500;color:white;text-align:center;padding:10px 16px;font-size:14px;font-family:Inter,sans-serif;font-weight:600;';
-    banner.innerHTML = '⏳ Server is waking up (Render free tier). Please wait 30 seconds and try again…';
-    document.body.prepend(banner);
+  // Only show the banner on cloud (not localhost)
+  if (!IS_LOCAL) {
+    let banner = document.getElementById('server-wake-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'server-wake-banner';
+      banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#FF4500;color:white;text-align:center;padding:10px 16px;font-size:14px;font-family:Inter,sans-serif;font-weight:600;';
+      banner.innerHTML = '⏳ Server is waking up (Render free tier). Please wait 30 seconds and try again…';
+      document.body.prepend(banner);
+    }
+    banner.style.display = 'block';
+    return new Promise(resolve => {
+      const iv = setInterval(async () => {
+        const ready = await pingServer();
+        if (ready) { clearInterval(iv); resolve(true); }
+      }, 5000);
+    });
   }
-  banner.style.display = 'block';
-  // Retry every 5 seconds silently
-  return new Promise(resolve => {
-    const iv = setInterval(async () => {
-      const ready = await pingServer();
-      if (ready) { clearInterval(iv); resolve(true); }
-    }, 5000);
-  });
+  return true;
 }
 
 // ─── Fetch with Auto-Retry ────────────────────────────────────────────────────
@@ -58,8 +65,8 @@ async function fetchWithRetry(url, opts = {}, retries = 2) {
   }
 }
 
-// Wake the server immediately on page load
-pingServer();
+// Ping only on cloud, not localhost
+if (!IS_LOCAL) pingServer();
 
 
 // ─── Page Router ─────────────────────────────────────
