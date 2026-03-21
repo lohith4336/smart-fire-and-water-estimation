@@ -15,14 +15,19 @@ except ImportError:
 
 # [ML HYBRID ENGINE INITIALIZATION]
 ML_MODEL = None
-try:
-    from ultralytics import YOLO
-    MODEL_PATH = os.path.join(os.path.dirname(__file__), 'yolo_fire_model.pt')
-    if os.path.exists(MODEL_PATH):
-        ML_MODEL = YOLO(MODEL_PATH)
-        print("✅ FireSense Hybrid ML Engine Active: Loaded yolo_fire_model.pt!")
-except Exception:
-    pass
+RENDER_ENV = os.environ.get('RENDER') # Detect if we are on Render.com
+
+if not RENDER_ENV:
+    try:
+        from ultralytics import YOLO
+        MODEL_PATH = os.path.join(os.path.dirname(__file__), 'yolo_fire_model.pt')
+        if os.path.exists(MODEL_PATH):
+            ML_MODEL = YOLO(MODEL_PATH)
+            print("✅ FireSense Hybrid ML Engine Active: Loaded yolo_fire_model.pt!")
+    except Exception:
+        pass
+else:
+    print("🛡️ Render Cloud Defense: Disabling heavy ML model to conserve RAM (512MB limit).")
 
 
 def analyze_fire_image(image_path: str | None) -> dict:
@@ -77,67 +82,51 @@ def _analyze_with_hybrid(image_path: str) -> dict:
                 print(f"YOLO Warning: {e}")
         
         # 2. Computer Vision Heuristics (Severity Estimation)
-        img_full.thumbnail((400, 400))
+        img_full.thumbnail((300, 300))  # Slightly smaller to save memory
         pixels = list(img_full.getdata())
         total = len(pixels)
-
-        # --- ADVANCED STRUCTURAL SCAN ---
+        
         fire_pixels = 0
         bright_fire = 0
         medium_fire = 0
-        fire_pixel_coords = []
-        import colorsys
+        ss = [] # Saturation collector
         
-        # We sample the image to find the "Structure" of the fire
-        for y in range(0, img_full.height, 2):
-            for x in range(0, img_full.width, 2):
-                r, g, b = img_full.getpixel((x, y))
-                h, s, v = colorsys.rgb_to_hsv(r/255.0, g/255.0, b/255.0)
-                
-                # Flame Heuristic: 
-                # Fire is Orange-Red (0.04-0.16) but has a very high diversity of Saturation.
-                # Sun Coronas have extremely High Saturation (0.85+) and are very structured.
-                if v > 0.70 and (0.04 <= h <= 0.16):
-                    # We look for the "chaotic" saturation signature of fire, not a solid sun-disc
-                    if s > 0.45 and r > g * 1.1: 
-                        fire_pixels += 1
-                        fire_pixel_coords.append((x, y, s)) # Track saturation for variance check
-                        if v > 0.90: bright_fire += 1
-                        elif v > 0.80: medium_fire += 1
+        import colorsys
+        for r, g, b in pixels:
+            h, s, v = colorsys.rgb_to_hsv(r/255.0, g/255.0, b/255.0)
+            
+            # Strict Flame Heuristic
+            if v > 0.70 and (0.04 <= h <= 0.16):
+                if s > 0.40 and r > g * 1.1: 
+                    fire_pixels += 1
+                    ss.append(s)
+                    if v > 0.90: bright_fire += 1
+                    elif v > 0.80: medium_fire += 1
 
-        total_sampled = (img_full.width // 2) * (img_full.height // 2)
-        ratio = fire_pixels / total_sampled if total_sampled > 0 else 0
+        ratio = fire_pixels / total if total > 0 else 0
         
         # --- SPATIAL DISPERSION CHECK (THE 'SUN' VETO) ---
         is_chaotic = True
-        if fire_pixels > 25:
-            xs = [p[0] for p in fire_pixel_coords]
-            ys = [p[1] for p in fire_pixel_coords]
-            ss = [p[2] for p in fire_pixel_coords]
-            min_x, max_x, min_y, max_y = min(xs), max(xs), min(ys), max(ys)
-            width, height = (max_x - min_x) + 1, (max_y - min_y) + 1
-            
-            # Density & Structure Logic
-            density = fire_pixels / (width * height / 4.0)
-            
-            # Aspect Ratio: Sun is 1.0. Fire is usually skewed.
-            aspect = width / height if height > 0 else 1
-            
+        if fire_pixels > 20 and total > 0:
             # Variance in Saturation: Sun coronas are very uniform (low variance).
             # Fire has high variance (hot cores vs cooler edges).
             avg_s = sum(ss) / len(ss)
             s_variance = sum((s - avg_s)**2 for s in ss) / len(ss)
             
+            # Simple Density Estimation based on ratio vs total pixels
             # THE VETO: Solid, non-chaotic, uniform circular objects are rejected
-            if 0.8 < aspect < 1.25 and density > 0.55 and s_variance < 0.02:
-                is_chaotic = False # Solid uniform circle found (likely the sun or a lamp)
-            elif density > 0.80:
-                is_chaotic = False # Perfectly solid block found (red wall/object)
+            if ratio < 0.25 and s_variance < 0.015:
+                is_chaotic = False # Solid uniform block found (likely the sun or a lamp)
+            elif ratio > 0.85:
+                is_chaotic = False # Perfectly solid block found (red wall)
+        elif fire_pixels > 0:
+            # Noise filtering
+            if fire_pixels < 15: is_chaotic = False
         else:
-            is_chaotic = False 
+            is_chaotic = False
         
         # 3. Hybrid Decision Logic Engine
-        if ml_fire_prob is not None:
+        if ML_MODEL is not None and ml_fire_prob is not None:
             # Overriding heuristic detection with true Machine Learning!
             # Increase threshold for AI: Small models need 85%+ confidence to veto the structure check
             fire_detected = bool(ml_fire_prob > 0.82) 
@@ -155,8 +144,8 @@ def _analyze_with_hybrid(image_path: str) -> dict:
             if not fire_detected:
                 ratio = 0.0 
         else:
-            # Fallback to standard CV pixel heuristics if ML is missing
-            fire_detected = ratio > 0.008 and is_chaotic
+            # Fallback to standard CV pixel heuristics
+            fire_detected = ratio > 0.006 and is_chaotic
             if ratio > 0.85:
                 fire_detected = False # Solid color rejection
             final_confidence = min(99, 70 + (ratio * 100))
