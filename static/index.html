@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+  <title>FireSense — Smart Fire Detection</title>
+  <meta name="description" content="FireSense — Report fires instantly and alert the nearest fire station across India."/>
+  <!-- PWA / Mobile -->
+  <meta name="theme-color" content="#FF4500"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="FireSense"/>
+  <link rel="manifest" href="/static/manifest.json"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"/>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+  <style>
+    /* ── SPA Page Switching ── */
+    .page { display: none !important; }
+    .page.active { display: block !important; }
+    #page-login.active, #page-register.active { display: flex !important; }
+
+    /* ══════════════════════════════════
+       CITIZEN PORTAL — Camera-First UI
+    ══════════════════════════════════ */
+    #page-citizen.active {
+      display: flex !important;
+      flex-direction: column;
+      height: 100dvh;
+      overflow: hidden;
+      background: #0a0a0a;
+      position: relative;
+    }
+
+    /* ── Top Camera Viewfinder ── */
+    .cam-zone {
+      position: relative;
+      flex: 0 0 58%;
+      background: #111;
+      overflow: hidden;
+    }
+    .cam-zone video,
+    .cam-zone canvas.cam-snapshot {
+      width: 100%; height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .cam-zone canvas.cam-snapshot { position: absolute; top:0; left:0; }
+
+    /* Overlay controls on top of camera */
+    .cam-top-bar {
+      position: absolute; top: 0; left: 0; right: 0;
+      padding: 16px 16px calc(env(safe-area-inset-top,0px) + 10px);
+      display: flex; justify-content: space-between; align-items: center;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.55), transparent);
+      z-index: 10;
+    }
+    .cam-logo { color: white; font-weight: 900; font-size: 20px; letter-spacing: -0.5px; }
+    .cam-logo span { color: var(--fire-orange); }
+    .cam-top-actions { display: flex; gap: 10px; }
+    .cam-icon-btn {
+      width: 38px; height: 38px; border-radius: 50%;
+      background: rgba(255,255,255,0.15); backdrop-filter: blur(8px);
+      border: none; color: white; font-size: 18px;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      transition: background 0.2s;
+    }
+    .cam-icon-btn:active { background: rgba(255,255,255,0.3); }
+
+    /* Camera capture buttons row */
+    .cam-bottom-controls {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      padding: 12px 20px 16px;
+      background: linear-gradient(to top, rgba(0,0,0,0.7), transparent);
+      display: flex; justify-content: space-around; align-items: center;
+      z-index: 10;
+    }
+    .cam-action-btn {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      background: rgba(255,255,255,0.12); backdrop-filter: blur(10px);
+      border: 1.5px solid rgba(255,255,255,0.2);
+      border-radius: 14px; padding: 10px 18px;
+      color: white; font-size: 11px; font-weight: 600; cursor: pointer;
+      transition: all 0.15s; font-family: 'Inter', sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .cam-action-btn .icon { font-size: 22px; line-height: 1; }
+    .cam-action-btn:active { transform: scale(0.93); background: rgba(255,255,255,0.22); }
+    .cam-action-btn.recording {
+      background: rgba(255,40,40,0.4);
+      border-color: rgba(255,40,40,0.6);
+      animation: pulse-rec 1s ease infinite;
+    }
+    @keyframes pulse-rec {
+      0%,100%{box-shadow:0 0 0 0 rgba(255,40,40,0.5);}
+      50%{box-shadow:0 0 0 8px rgba(255,40,40,0);}
+    }
+
+    /* Captured snapshot overlay */
+    .snap-overlay {
+      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+      background: #000; z-index: 8; display: none;
+    }
+    .snap-overlay img, .snap-overlay video {
+      width: 100%; height: 100%; object-fit: cover;
+    }
+    .snap-overlay-btns {
+      position: absolute; bottom: 16px; left: 0; right: 0;
+      display: flex; justify-content: center; gap: 16px; z-index: 9;
+    }
+    .snap-retake-btn, .snap-use-btn {
+      padding: 10px 26px; border-radius: 50px; border: none;
+      font-weight: 700; font-size: 14px; cursor: pointer;
+      font-family: 'Inter', sans-serif; transition: all 0.15s;
+    }
+    .snap-retake-btn { background: rgba(255,255,255,0.18); color: white; backdrop-filter: blur(8px); }
+    .snap-use-btn { background: var(--fire-orange); color: white; }
+    .snap-retake-btn:active { opacity: 0.7; }
+    .snap-use-btn:active { opacity: 0.7; }
+
+    /* Record indicator dot */
+    .rec-dot {
+      display: none; position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+      background: rgba(255,40,40,0.85); color: white; border-radius: 50px;
+      padding: 4px 12px; font-size: 12px; font-weight: 700; z-index: 12;
+      align-items: center; gap: 6px;
+    }
+    .rec-dot.show { display: flex; }
+    .rec-dot-blink { width: 8px; height: 8px; background: white; border-radius: 50%; animation: pulse-dot 1s infinite; }
+
+    /* Start camera prompt */
+    .cam-start-prompt {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 14px; z-index: 7;
+      color: white; text-align: center; padding: 20px;
+    }
+    .cam-start-prompt .big-icon { font-size: 56px; }
+    .cam-start-prompt p { font-size: 14px; color: rgba(255,255,255,0.65); }
+    .cam-start-main-btn {
+      background: var(--fire-orange); color: white; border: none;
+      padding: 14px 32px; border-radius: 50px; font-weight: 700; font-size: 15px;
+      cursor: pointer; font-family: 'Inter', sans-serif;
+    }
+
+    /* ── Bottom Sheet: Report Details ── */
+    .report-sheet {
+      flex: 1;
+      background: var(--bg-dark);
+      border-top-left-radius: 22px;
+      border-top-right-radius: 22px;
+      overflow-y: auto;
+      padding: 20px 16px calc(env(safe-area-inset-bottom, 0px) + 80px);
+      -webkit-overflow-scrolling: touch;
+      margin-top: -18px;
+      position: relative;
+      z-index: 5;
+    }
+    .sheet-handle {
+      width: 40px; height: 4px; background: rgba(255,255,255,0.15);
+      border-radius: 2px; margin: 0 auto 16px;
+    }
+    .sheet-title { font-size: 17px; font-weight: 800; color: var(--text-primary); margin-bottom: 4px; }
+    .sheet-sub { font-size: 13px; color: var(--text-muted); margin-bottom: 18px; }
+
+    /* Reporter info grid */
+    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+    .info-grid .form-group { margin-bottom: 0; }
+    .info-grid .form-group:last-child:nth-child(odd) { grid-column: 1 / -1; }
+
+    .location-inline {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 12px 14px;
+      display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+    }
+    .loc-texts { flex: 1; }
+    .loc-texts .loc-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+    .loc-texts .loc-coords { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .loc-detect-btn {
+      padding: 6px 12px; font-size: 12px; border: 1px solid var(--border);
+      background: var(--bg-panel); color: var(--text-primary); border-radius: 8px;
+      cursor: pointer; font-family: 'Inter', sans-serif; font-weight: 600;
+      white-space: nowrap;
+    }
+
+    /* Map (compact) */
+    .compact-map { border-radius: var(--radius-sm); overflow: hidden; margin-bottom: 12px; }
+
+    /* Nearest station pill */
+    .nearest-pill {
+      background: rgba(255,107,53,0.12); border: 1px solid rgba(255,107,53,0.3);
+      border-radius: 50px; padding: 8px 14px; font-size: 12px; font-weight: 600;
+      color: var(--fire-orange); display: none; align-items: center; gap: 6px;
+      margin-bottom: 14px;
+    }
+    .nearest-pill.show { display: flex; }
+
+    /* Submit button — fixed at bottom */
+    .submit-fab {
+      position: fixed; bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+      left: 16px; right: 16px; z-index: 100;
+      background: linear-gradient(135deg, #FF4500, #FF6B35);
+      color: white; border: none; border-radius: 16px;
+      padding: 17px; font-size: 16px; font-weight: 800;
+      cursor: pointer; font-family: 'Inter', sans-serif;
+      box-shadow: 0 8px 24px rgba(255,69,0,0.45);
+      transition: all 0.2s;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .submit-fab:active { transform: scale(0.97); opacity: 0.9; }
+    .submit-fab:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+
+    /* Success screen */
+    #success-screen {
+      position: fixed; inset: 0; z-index: 200;
+      background: var(--bg-dark); display: none;
+      flex-direction: column; align-items: center; justify-content: center;
+      padding: 32px; text-align: center;
+    }
+    #success-screen.show { display: flex; }
+    .success-icon-big { font-size: 80px; animation: bounceIn 0.4s ease; margin-bottom: 16px; }
+    @keyframes bounceIn {
+      0%{transform:scale(0.5);opacity:0} 70%{transform:scale(1.1)} 100%{transform:scale(1);opacity:1}
+    }
+    .success-title { font-size: 26px; font-weight: 900; color: var(--text-primary); margin-bottom: 8px; }
+    .success-detail { font-size: 14px; color: var(--text-muted); line-height: 1.6; margin-bottom: 28px; }
+    .success-station { font-size: 18px; font-weight: 700; color: var(--fire-orange); margin-bottom: 6px; }
+    .success-dist { font-size: 13px; color: var(--text-muted); }
+
+    /* ── Citizen navbar (desktop fallback) ── */
+    .citizen-navbar {
+      display: none;
+    }
+    @media(min-width: 768px) {
+      .citizen-navbar { display: flex; }
+      #page-citizen.active {
+        display: block !important;
+        height: auto; overflow: visible;
+        background: var(--bg-dark);
+      }
+      .cam-zone { flex: none; height: 65vh; border-radius: 0; }
+      .report-sheet { margin-top: 0; border-radius: 0; }
+      .submit-fab { position: static; margin-top: 16px; }
+      #success-screen { position: absolute; border-radius: var(--radius-lg); }
+      .citizen-navbar { display: flex !important; }
+    }
+
+    /* ── Auth pages ── */
+    #page-login, #page-register {
+      min-height: 100vh; align-items: center; justify-content: center;
+      padding: 20px;
+      background: radial-gradient(ellipse at top, rgba(255,69,0,0.08) 0%, transparent 60%), var(--bg-dark);
+    }
+    #page-register { align-items: flex-start; padding-top: 40px; }
+    #reg-map { width:100%; height:240px; border-radius:var(--radius-sm); border:1px solid var(--border); cursor:crosshair; margin-bottom:4px; }
+    .coord-row { display:flex; gap:10px; }
+    .coord-row .form-group { flex:1; }
+
+    /* ── Dashboard ── */
+    #page-dashboard.active {
+      display: grid !important;
+      grid-template-rows: 64px 1fr;
+      height: 100vh; overflow: hidden;
+    }
+    .dash-body { display:grid; grid-template-columns:300px 1fr; height:calc(100vh - 64px); overflow:hidden; }
+    .dash-sidebar { background:var(--bg-card); border-right:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; }
+    .dash-content { overflow-y:auto; padding:24px; background:var(--bg-dark); }
+    .notif-badge { background:var(--fire-red); color:white; border-radius:99px; padding:2px 8px; font-size:11px; font-weight:700; margin-left:6px; }
+    .office-name-display { font-size:14px; color:var(--text-muted); }
+    .office-name-display strong { color:var(--fire-orange); }
+    .new-alert-banner { background:linear-gradient(90deg,rgba(255,69,0,0.15),rgba(255,107,53,0.08)); border:1px solid rgba(255,69,0,0.4); border-radius:var(--radius-sm); padding:12px 16px; display:flex; align-items:center; gap:10px; font-size:13px; font-weight:600; color:var(--fire-orange); position:sticky; top:0; z-index:50; animation:slideUp 0.4s ease; }
+    .progress-bar { height:6px; background:var(--border); border-radius:3px; overflow:hidden; margin-top:8px; }
+    .progress-fill { height:100%; border-radius:3px; background:linear-gradient(90deg,var(--fire-red),var(--fire-orange)); transition:width .5s; }
+    .tab-content { display:none; }
+    .tab-content.active { display:block; }
+    .dash-tabs { display:flex; gap:4px; margin-bottom:20px; }
+    .dash-tab-btn { padding:10px 20px; border:none; border-radius:var(--radius-sm); background:var(--bg-panel); color:var(--text-muted); font-family:'Inter',sans-serif; font-weight:500; font-size:14px; cursor:pointer; transition:var(--transition); border:1px solid var(--border); }
+    .dash-tab-btn.active { background:linear-gradient(135deg,var(--fire-red),var(--fire-orange)); color:white; border-color:transparent; }
+    .empty-state { text-align:center; padding:60px 20px; color:var(--text-muted); }
+    .empty-state-icon { font-size:48px; margin-bottom:12px; }
+    .stats-bar { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:24px; }
+    .stat-card { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-md); padding:18px; text-align:center; transition:var(--transition); }
+    .stat-card:hover { border-color:var(--border-glow); }
+    .stat-value { font-size:28px; font-weight:800; color:var(--fire-orange); }
+    .stat-label { font-size:12px; color:var(--text-muted); margin-top:4px; text-transform:uppercase; }
+    .sidebar-header { padding:16px; border-bottom:1px solid var(--border); flex-shrink:0; }
+    .sidebar-filters { padding:12px 16px; border-bottom:1px solid var(--border); flex-shrink:0; display:flex; flex-direction:column; gap:8px; }
+    .sidebar-list { flex:1; overflow-y:auto; }
+    .report-item { padding:14px 16px; border-bottom:1px solid var(--border); cursor:pointer; transition:var(--transition); display:flex; align-items:flex-start; gap:12px; }
+    .report-item:hover, .report-item.active { background:var(--bg-hover); }
+    .report-item.active { border-left:3px solid var(--fire-red); }
+    .report-thumb { width:52px; height:52px; border-radius:8px; overflow:hidden; flex-shrink:0; background:var(--bg-panel); display:flex; align-items:center; justify-content:center; }
+    .report-thumb img { width:100%; height:100%; object-fit:cover; }
+    .report-thumb-icon { font-size:22px; }
+    .report-meta { flex:1; min-width:0; }
+    .report-time { font-size:12px; color:var(--text-muted); }
+    .report-addr { font-size:13px; font-weight:500; margin:2px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .report-chips { display:flex; gap:6px; flex-wrap:wrap; }
+    .new-indicator { width:8px; height:8px; background:var(--fire-red); border-radius:50%; flex-shrink:0; animation:pulse-dot 1.5s ease infinite; }
+    .detail-panel { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-lg); padding:28px; }
+    .detail-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:24px; }
+    .detail-title { font-size:20px; font-weight:700; }
+    .detail-image { width:100%; border-radius:var(--radius-md); overflow:hidden; max-height:280px; margin-bottom:20px; background:var(--bg-panel); display:flex; align-items:center; justify-content:center; }
+    .detail-image img { width:100%; max-height:280px; object-fit:contain; }
+    .analysis-card { background:linear-gradient(135deg,rgba(255,69,0,.08),rgba(255,107,53,.04)); border:1px solid rgba(255,69,0,.2); border-radius:var(--radius-md); padding:24px; margin-top:20px; }
+    .analysis-title { font-size:16px; font-weight:700; margin-bottom:16px; display:flex; align-items:center; gap:8px; }
+    .analysis-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    .analysis-item { background:var(--bg-panel); border-radius:var(--radius-sm); padding:14px; }
+    .analysis-label { font-size:11px; text-transform:uppercase; color:var(--text-muted); font-weight:600; letter-spacing:.5px; margin-bottom:4px; }
+    .analysis-val { font-size:18px; font-weight:700; }
+    .analysis-val.fire-color-small { color:var(--success); }
+    .analysis-val.fire-color-medium { color:var(--warning); }
+    .analysis-val.fire-color-large { color:var(--danger); }
+    .water-display { font-size:14px; margin-top:4px; color:var(--text-muted); }
+    .equip-card { background:var(--bg-panel); border-radius:var(--radius-sm); padding:14px; margin-top:12px; }
+    .equip-title { font-size:13px; font-weight:600; margin-bottom:8px; color:var(--fire-orange); }
+    .equip-row { display:flex; justify-content:space-between; font-size:13px; padding:4px 0; border-bottom:1px solid var(--border); }
+    .equip-row:last-child { border:none; }
+    .equip-key { color:var(--text-muted); }
+    .bbox-canvas-wrap { position:relative; display:inline-block; width:100%; }
+    .bbox-canvas { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
+    .status-select { background:var(--bg-panel); border:1px solid var(--border); color:var(--text-primary); border-radius:var(--radius-sm); padding:8px 12px; font-size:13px; font-family:'Inter',sans-serif; cursor:pointer; }
+    .map-panel-container { border-radius:var(--radius-md); overflow:hidden; border:1px solid var(--border); }
+    .caller-info-box { background:rgba(255,107,53,0.07); border:1px solid rgba(255,107,53,0.2); border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:16px; display:flex; gap:16px; flex-wrap:wrap; }
+    .caller-info-item { display:flex; flex-direction:column; gap:2px; }
+    .caller-info-label { font-size:10px; text-transform:uppercase; color:var(--text-muted); font-weight:600; letter-spacing:.5px; }
+    .caller-info-val { font-size:14px; font-weight:600; color:var(--text-primary); }
+    @media(max-width:768px) {
+      .dash-body { display: block; overflow-y: auto; height: calc(100vh - 64px); }
+      .dash-sidebar { display: block; height: auto; min-height: 200px; max-height: 400px; border-bottom: 1px solid var(--border); border-right: none; }
+      .dash-content { overflow-y: visible; height: auto; }
+      .stats-bar { grid-template-columns:repeat(2,1fr); }
+      .analysis-grid { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ╔══════════════════════════════════════╗
+     ║  PAGE 1 — CITIZEN PORTAL           ║
+     ╚══════════════════════════════════════╝ -->
+<div id="page-citizen" class="page active">
+
+  <!-- Desktop navbar only -->
+  <nav class="citizen-navbar">
+    <a href="javascript:void(0)" onclick="showPage('citizen')" class="citizen-logo">🔥 Fire<span>Sense</span></a>
+    <div class="flex gap-3" style="align-items:center">
+      <span class="badge badge-pending" style="font-size:11px">🇮🇳 India</span>
+      <button class="btn btn-ghost btn-sm" onclick="showPage('login')">🚒 Fire Dept. Login</button>
+    </div>
+  </nav>
+
+  <!-- ── Camera Viewfinder ── -->
+  <div class="cam-zone" id="cam-zone">
+    <!-- Top bar -->
+    <div class="cam-top-bar">
+      <div class="cam-logo">🔥 Fire<span>Sense</span></div>
+      <div class="cam-top-actions">
+        <button class="cam-icon-btn" onclick="flipCamera()" id="btn-flip" title="Flip camera">🔄</button>
+        <button class="cam-icon-btn" onclick="showPage('login')" title="Fire dept login">🚒</button>
+      </div>
+    </div>
+
+    <!-- Recording indicator -->
+    <div class="rec-dot" id="rec-dot">
+      <div class="rec-dot-blink"></div> REC
+    </div>
+
+    <!-- Live video feed -->
+    <video id="cam-feed" autoplay muted playsinline></video>
+
+    <!-- Snapshot canvas (hidden until capture) -->
+    <canvas id="cam-snapshot" class="cam-snapshot" style="display:none"></canvas>
+
+    <!-- Captured media overlay (image/video preview) -->
+    <div class="snap-overlay" id="snap-overlay">
+      <img id="snap-img" src="" alt="capture" style="display:none"/>
+      <video id="snap-vid" src="" controls style="display:none; width:100%; height:100%; object-fit:cover;"></video>
+      <div class="snap-overlay-btns">
+        <button class="snap-retake-btn" onclick="retakeMedia()">↩ Retake</button>
+        <button class="snap-use-btn" onclick="useMedia()">✓ Use This</button>
+      </div>
+    </div>
+
+    <!-- Start camera prompt -->
+    <div class="cam-start-prompt" id="cam-prompt">
+      <div class="big-icon">📸</div>
+      <p>Tap to open camera and report a fire instantly</p>
+      <button class="cam-start-main-btn" onclick="startCitizenCamera()">📷 Open Camera</button>
+    </div>
+
+    <!-- Bottom camera controls -->
+    <div class="cam-bottom-controls" id="cam-controls" style="display:none">
+      <button class="cam-action-btn" onclick="triggerUpload()">
+        <span class="icon">📁</span> Upload
+      </button>
+      <button class="cam-action-btn" id="btn-capture" onclick="captureFrame()">
+        <span class="icon">📷</span> Photo
+      </button>
+    </div>
+
+    <!-- Hidden file input -->
+    <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFileSelect(this)"/>
+  </div>
+
+  <!-- ── Report Details Sheet ── -->
+  <div class="report-sheet" id="report-sheet">
+    <div class="sheet-handle"></div>
+
+    <!-- Media selected indicator -->
+    <div id="media-indicator" style="display:none; margin-bottom:12px;">
+      <div style="font-size:12px; color:var(--success); font-weight:600; display:flex; align-items:center; gap:6px;">
+        ✅ <span id="media-indicator-text">Photo ready</span>
+        <button onclick="clearSelectedMedia()" style="margin-left:auto; background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:18px; padding:0;">✕</button>
+      </div>
+    </div>
+
+    <div class="sheet-title">🔥 Report a Fire</div>
+    <div class="sheet-sub">Fill your info and tap the button to alert the nearest fire station instantly.</div>
+
+    <!-- PRE-ANALYSIS RESULT CONTAINER -->
+    <div id="pre-analysis-container" style="display:none; background:rgba(255,69,0,0.08); border:1px solid rgba(255,69,0,0.3); border-radius:12px; padding:16px; margin-bottom:20px;">
+      <h3 style="margin-top:0; margin-bottom:12px; font-size:16px; color:var(--text-primary); display:flex; align-items:center; gap:8px;">
+        <span id="pre-sev-icon" style="font-size:20px;">🔥</span> 
+        <span>Fire Detected: <span id="pre-sev-text" style="font-weight:800; color:var(--fire-orange);">Medium</span></span>
+      </h3>
+      <div style="display:flex; justify-content:space-between; margin-bottom:12px; background:var(--bg-panel); padding:10px; border-radius:8px;">
+        <div><div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Estimated Water</div>
+        <div style="font-size:16px; font-weight:800; color:var(--info);" id="pre-water-text">2,500 L</div></div>
+        <div style="text-align:right;"><div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Safety Buffer</div>
+        <div style="font-size:13px; font-weight:600; color:var(--text-primary); margin-top:2px;">+10% Included</div></div>
+      </div>
+      <div>
+        <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700; margin-bottom:6px;">Safety Tips</div>
+        <ul id="pre-tips-list" style="margin:0; padding-left:20px; font-size:13px; color:var(--text-primary); line-height:1.5;">
+        </ul>
+      </div>
+      <div id="pre-actions-row" style="display:none; margin-top:16px;">
+        <button class="btn btn-secondary btn-full" style="border-color:var(--success); color:var(--success);" onclick="reportAnother()">✅ I safely cleared it (Dismiss)</button>
+      </div>
+    </div>
+
+    <!-- Reporter Info (Always visible now) -->
+    <div id="reporter-form-section">
+      <div class="info-grid">
+        <div class="form-group">
+          <label class="label">Your Name</label>
+          <input class="input" id="r-name" type="text" placeholder="e.g. Rahul Kumar" autocomplete="name"/>
+        </div>
+        <div class="form-group">
+          <label class="label">Your Phone</label>
+          <input class="input" id="r-phone" type="tel" placeholder="e.g. 9876543210" autocomplete="tel"/>
+        </div>
+      </div>
+
+    <!-- Location -->
+    <div class="form-group">
+      <label class="label">Location Details</label>
+      <input class="input" id="addr-hint" type="text" placeholder="e.g. Near City Mall, opposite SBI Bank"/>
+    </div>
+
+    <!-- Location status -->
+    <div class="location-inline">
+      <span style="font-size:22px">📍</span>
+      <div class="loc-texts">
+        <div class="loc-name" id="loc-status">Location not yet detected</div>
+        <div class="loc-coords" id="loc-coords"></div>
+      </div>
+      <button class="loc-detect-btn" onclick="detectLocation()">Detect</button>
+    </div>
+
+    <!-- Nearest station pill -->
+    <div class="nearest-pill" id="nearest-pill">
+      🚒 <span id="nearest-pill-text">Detecting nearest station...</span>
+    </div>
+
+    <!-- Compact map -->
+    <div class="compact-map" style="height: 180px;">
+      <div id="citizen-map" style="width:100%; height:100%;"></div>
+    </div>
+
+    <!-- Safety tips (collapsed) -->
+    <details style="margin-top:16px; margin-bottom:8px;">
+      <summary style="font-size:13px; color:var(--text-muted); cursor:pointer; font-weight:600;">🛡️ Fire Safety Tips</summary>
+      <div class="tips-grid" style="margin-top:12px; grid-template-columns: 1fr 1fr;">
+        <div class="tip-card"><div class="tip-icon">🏃</div><div class="tip-title">Evacuate</div><div class="tip-body">Leave immediately using stairs, not elevators.</div></div>
+        <div class="tip-card"><div class="tip-icon">🚪</div><div class="tip-title">Close Doors</div><div class="tip-body">Slows fire spread significantly.</div></div>
+        <div class="tip-card"><div class="tip-icon">🌫️</div><div class="tip-title">Stay Low</div><div class="tip-body">Crawl — smoke rises. Cover mouth.</div></div>
+        <div class="tip-card"><div class="tip-icon">🧯</div><div class="tip-title">Extinguishers</div><div class="tip-body">Use PASS method only if trained.</div></div>
+        <div class="tip-card"><div class="tip-icon">🔌</div><div class="tip-title">Electricals</div><div class="tip-body">Do not use water on electrical fires.</div></div>
+        <div class="tip-card"><div class="tip-title">📞</div><div class="tip-title">Emergency</div><div class="tip-body">🔴 Fire: <strong>101</strong> &nbsp; 🚨 <strong>112</strong></div></div>
+      </div>
+    </details>
+    </div> <!-- /#reporter-form-section -->
+  </div>
+
+  <!-- Submit FAB -->
+  <button class="submit-fab" id="btn-report" onclick="submitReport()">
+    🔥 REPORT FIRE NOW
+  </button>
+
+  <!-- Analyzing Overlay -->
+  <div id="analyzing-overlay" style="display:none; position:fixed; inset:0; z-index:999; background:rgba(0,0,0,0.85); flex-direction:column; align-items:center; justify-content:center; color:white;">
+    <div style="font-size:48px; animation: pulse-dot 1s infinite;">🔬</div>
+    <h2 style="margin-top:16px; font-weight:700; font-family:'Inter',sans-serif;">Analyzing Media...</h2>
+    <p style="color:var(--text-muted); font-size:14px; font-family:'Inter',sans-serif;">Determining fire presence & severity</p>
+  </div>
+
+  <!-- Success overlay -->
+  <div id="success-screen">
+    <div class="success-icon-big">✅</div>
+    <div class="success-title">Alert Sent!</div>
+    <div class="success-station" id="suc-station">—</div>
+    <div class="success-dist" id="suc-dist">—</div>
+    <div class="success-detail" id="suc-detail">Emergency services have been alerted and are on their way.</div>
+    <button class="cam-start-main-btn" onclick="reportAnother()" style="margin-top:8px;">📋 Report Another</button>
+    <p style="font-size:12px; color:var(--text-muted); margin-top:16px;">⚡ Emergency: <strong>101</strong> &nbsp;|&nbsp; <strong>112</strong></p>
+  </div>
+
+</div><!-- /#page-citizen -->
+
+
+<!-- ╔══════════════════════════════════════╗
+     ║  PAGE 2 — LOGIN                    ║
+     ╚══════════════════════════════════════╝ -->
+<div id="page-login" class="page">
+  <div class="auth-card">
+    <div class="auth-logo">🔥 Fire<span>Sense</span>
+      <div class="auth-subtitle">Fire Department Portal</div>
+    </div>
+    <div id="login-error" class="hidden" style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:var(--danger);border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:16px;font-size:14px;"></div>
+    <form id="login-form" onsubmit="handleLogin(event)">
+      <div class="form-group">
+        <label class="label">Office Name</label>
+        <input class="input" id="login-name" type="text" placeholder="e.g. Mumbai Fire Brigade HQ" required autocomplete="organization"/>
+      </div>
+      <div class="form-group">
+        <label class="label">Password</label>
+        <div style="position:relative">
+          <input class="input" id="login-pass" type="password" placeholder="••••••••" required style="padding-right: 40px;"/>
+          <span id="eye-login" onclick="togglePassword('login-pass', 'eye-login')" style="position:absolute; right:12px; top:50%; transform:translateY(-50%); cursor:pointer; font-size:18px; user-select:none;">👁️</span>
+        </div>
+      </div>
+      <button class="btn btn-primary btn-full btn-lg" type="submit" id="login-btn">🚒 Login to Dashboard</button>
+    </form>
+    <div class="divider"><span>or</span></div>
+    <div class="auth-footer">New fire office? <a href="javascript:void(0)" onclick="showPage('register')">Register your station →</a></div>
+    <div class="auth-footer" style="margin-top:10px"><a href="javascript:void(0)" onclick="showPage('citizen')" style="color:var(--text-muted)">← Back to Citizen Portal</a></div>
+  </div>
+</div><!-- /#page-login -->
+
+
+<!-- ╔══════════════════════════════════════╗
+     ║  PAGE 3 — REGISTER                 ║
+     ╚══════════════════════════════════════╝ -->
+<div id="page-register" class="page">
+  <div class="auth-card" style="max-width:560px">
+    <div style="margin-bottom:12px">
+      <a href="javascript:void(0)" onclick="showPage('login')" style="color:var(--text-muted);font-size:13px;text-decoration:none;display:inline-flex;align-items:center;gap:4px">← Back to Login</a>
+    </div>
+    <div class="auth-logo">🔥 Fire<span>Sense</span>
+      <div class="auth-subtitle">Register Your Fire Station</div>
+    </div>
+    <div id="reg-error" class="hidden" style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:var(--danger);border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:16px;font-size:14px;"></div>
+    <div id="reg-success" class="hidden confirm-box" style="margin-bottom:16px">
+      <div class="confirm-title">✅ Registered!</div>
+      <div class="confirm-msg">Your station is registered. <a href="javascript:void(0)" onclick="showPage('login')" style="color:var(--fire-orange)">Login now →</a></div>
+    </div>
+    <form id="reg-form" onsubmit="handleRegister(event)">
+      <div class="form-group">
+        <label class="label">Station Name *</label>
+        <input class="input" id="reg-name" type="text" placeholder="e.g. Bhopal Fire Station North" required/>
+      </div>
+      <div class="form-group">
+        <label class="label">Address</label>
+        <input class="input" id="reg-address" type="text" placeholder="Street, City, State"/>
+      </div>
+      <div class="form-group">
+        <label class="label">Contact Number</label>
+        <input class="input" id="reg-contact" type="text" placeholder="+91-XXXXXXXXXX"/>
+      </div>
+      <div class="form-group">
+        <label class="label">📍 Station Location *</label>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
+          <p style="font-size:12px;color:var(--text-muted);margin:0;">🖱️ Click the map OR use GPS:</p>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="detectRegLocation()" id="btn-reg-loc" style="padding:4px 10px;font-size:12px">📍 Detect Location</button>
+        </div>
+        <div id="reg-map"></div>
+      </div>
+      <div class="coord-row">
+        <div class="form-group">
+          <label class="label">Latitude *</label>
+          <input class="input" id="reg-lat" type="number" step="any" placeholder="e.g. 21.14" required/>
+        </div>
+        <div class="form-group">
+          <label class="label">Longitude *</label>
+          <input class="input" id="reg-lng" type="number" step="any" placeholder="e.g. 79.08" required/>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="label">Password *</label>
+        <div style="position:relative">
+          <input class="input" id="reg-pass" type="password" placeholder="Min 6 characters" required minlength="6" style="padding-right: 40px;"/>
+          <span id="eye-reg1" onclick="togglePassword('reg-pass', 'eye-reg1')" style="position:absolute; right:12px; top:50%; transform:translateY(-50%); cursor:pointer; font-size:18px; user-select:none;">👁️</span>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="label">Confirm Password *</label>
+        <div style="position:relative">
+          <input class="input" id="reg-pass2" type="password" placeholder="Repeat password" required style="padding-right: 40px;"/>
+          <span id="eye-reg2" onclick="togglePassword('reg-pass2', 'eye-reg2')" style="position:absolute; right:12px; top:50%; transform:translateY(-50%); cursor:pointer; font-size:18px; user-select:none;">👁️</span>
+        </div>
+      </div>
+      <button class="btn btn-primary btn-full" type="submit" id="reg-btn">🏢 Register Station</button>
+    </form>
+    <div class="auth-footer" style="margin-top:20px">Already registered? <a href="javascript:void(0)" onclick="showPage('login')">Login here →</a></div>
+  </div>
+</div><!-- /#page-register -->
+
+
+<!-- ╔══════════════════════════════════════╗
+     ║  PAGE 4 — DASHBOARD                ║
+     ╚══════════════════════════════════════╝ -->
+<div id="page-dashboard" class="page">
+  <!-- Navbar -->
+  <nav class="dash-navbar">
+    <div class="flex gap-3" style="align-items:center">
+      <div class="dash-logo">🔥 FireSense</div>
+      <span class="badge badge-pending" style="font-size:11px">🇮🇳 India</span>
+    </div>
+    <div class="flex gap-3" style="align-items:center">
+      <div class="office-name-display">Station: <strong id="office-name-lbl">—</strong></div>
+      <button class="btn btn-ghost btn-sm" id="alert-bell-btn">🔔 <span class="notif-badge hidden" id="notif-count">0</span></button>
+      <button class="btn btn-secondary btn-sm" onclick="exportPDF()">📄 Export PDF</button>
+      <button class="btn btn-ghost btn-sm" onclick="logout()">⬅ Logout</button>
+    </div>
+  </nav>
+
+  <div class="dash-body">
+    <!-- Sidebar -->
+    <aside class="dash-sidebar">
+      <div class="sidebar-header">
+        <div style="font-size:13px;font-weight:700;margin-bottom:10px;color:var(--fire-orange)">📋 Incident Reports</div>
+        <input class="input" id="search-input" type="text" placeholder="🔍 Search..." oninput="filterReports()" style="font-size:13px;padding:9px 12px"/>
+      </div>
+      <div class="sidebar-filters">
+        <select class="select" id="filter-status" onchange="loadReports()" style="font-size:13px;padding:8px 12px">
+          <option value="All">All Statuses</option>
+          <option value="Pending">Pending</option>
+          <option value="Dispatched">Dispatched</option>
+          <option value="Resolved">Resolved</option>
+        </select>
+        <select class="select" id="filter-severity" onchange="loadReports()" style="font-size:13px;padding:8px 12px">
+          <option value="All">All Severities</option>
+          <option value="Small">Small</option>
+          <option value="Medium">Medium</option>
+          <option value="Large">Large</option>
+        </select>
+        <input class="input" type="date" id="filter-date" onchange="loadReports()" style="font-size:13px;padding:8px 12px"/>
+        <button class="btn btn-ghost btn-sm" onclick="clearFilters()">✖ Clear Filters</button>
+      </div>
+      <div class="sidebar-list" id="report-list">
+        <div class="empty-state"><div class="empty-state-icon">📭</div><div>No reports yet</div></div>
+      </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="dash-content" id="dash-content">
+      <div id="new-alert-banner" class="hidden new-alert-banner" style="margin-bottom:16px">
+        🚨 <span id="new-alert-text">New emergency report!</span>
+        <button class="btn btn-sm btn-primary" style="margin-left:auto" onclick="dismissBanner()">View</button>
+      </div>
+
+      <div class="dash-tabs">
+        <button class="dash-tab-btn active" onclick="switchDashTab('overview')" id="dtab-overview">📊 Overview</button>
+        <button class="dash-tab-btn" onclick="switchDashTab('report')" id="dtab-report">📋 Report Detail</button>
+        <button class="dash-tab-btn" onclick="switchDashTab('map')" id="dtab-map">🗺️ Map View</button>
+      </div>
+
+      <!-- Overview Tab -->
+      <div id="tab-overview" class="tab-content active">
+        <div class="stats-bar">
+          <div class="stat-card"><div class="stat-value" id="stat-total">0</div><div class="stat-label">Total Reports</div></div>
+          <div class="stat-card"><div class="stat-value" style="color:var(--warning)" id="stat-pending">0</div><div class="stat-label">Pending</div></div>
+          <div class="stat-card"><div class="stat-value" style="color:var(--info)" id="stat-dispatched">0</div><div class="stat-label">Dispatched</div></div>
+          <div class="stat-card"><div class="stat-value" style="color:var(--success)" id="stat-resolved">0</div><div class="stat-label">Resolved</div></div>
+        </div>
+        <div class="card" style="margin-bottom:20px">
+          <div style="font-size:15px;font-weight:700;margin-bottom:14px">🔥 Severity Breakdown</div>
+          <div class="flex gap-4" style="margin-bottom:10px">
+            <div style="flex:1"><div style="font-size:12px;color:var(--success);margin-bottom:4px;font-weight:600">SMALL</div><div class="progress-bar"><div class="progress-fill" id="bar-small" style="width:0%;background:var(--success)"></div></div></div>
+            <div style="flex:1"><div style="font-size:12px;color:var(--warning);margin-bottom:4px;font-weight:600">MEDIUM</div><div class="progress-bar"><div class="progress-fill" id="bar-medium" style="width:0%;background:var(--warning)"></div></div></div>
+            <div style="flex:1"><div style="font-size:12px;color:var(--danger);margin-bottom:4px;font-weight:600">LARGE</div><div class="progress-bar"><div class="progress-fill" id="bar-large" style="width:0%;background:var(--danger)"></div></div></div>
+          </div>
+          <div class="flex gap-3" style="font-size:13px;color:var(--text-muted)">
+            <span>🟢 Small: <strong id="stat-small">0</strong></span>
+            <span>🟡 Medium: <strong id="stat-medium">0</strong></span>
+            <span>🔴 Large: <strong id="stat-large">0</strong></span>
+          </div>
+        </div>
+        <div class="card">
+          <div style="font-size:15px;font-weight:700;margin-bottom:12px">💡 Quick Actions</div>
+          <div class="flex gap-3 flex-wrap">
+            <button class="btn btn-secondary btn-sm" onclick="loadReports()">🔄 Refresh</button>
+            <button class="btn btn-secondary btn-sm" onclick="exportPDF()">📄 Export PDF</button>
+            <button class="btn btn-ghost btn-sm" onclick="switchDashTab('map')">🗺️ View Map</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Report Detail Tab -->
+      <div id="tab-report" class="tab-content">
+        <div id="report-detail-placeholder" class="empty-state"><div class="empty-state-icon">👈</div><div>Select a report from the sidebar</div></div>
+        <div id="report-detail" class="hidden detail-panel"></div>
+      </div>
+
+      <!-- Map Tab -->
+      <div id="tab-map" class="tab-content">
+        <div class="card" style="margin-bottom:16px;padding:16px 20px; display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <div style="font-size:15px;font-weight:700;margin-bottom:4px">🗺️ Incident Map — India</div>
+            <div style="font-size:13px;color:var(--text-muted)">Red = reports, blue 🚒 = fire stations.</div>
+          </div>
+          <button class="btn btn-secondary btn-sm" id="btn-clear-map" onclick="clearReportSelection()" style="display:none">View All Reports</button>
+        </div>
+        <div class="map-panel-container" style="height:calc(100vh - 280px)">
+          <div id="dashboard-map" style="width:100%;height:100%"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div><!-- /#page-dashboard -->
+
+<!-- Toast container -->
+<div class="toast-container" id="toast-container"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

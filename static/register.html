@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FireSense — Register Fire Station</title>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    .auth-card { max-width: 560px; }
+    #reg-map { width: 100%; height: 260px; border-radius: var(--radius-sm); border:1px solid var(--border); cursor: crosshair; }
+    .map-hint { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+    .coord-row { display:flex; gap:10px; }
+    .coord-row .form-group { flex:1; }
+  </style>
+</head>
+<body>
+  <div class="auth-page" style="align-items:flex-start; padding-top:40px">
+    <div class="auth-card">
+      <div class="auth-logo">🔥 Fire<span>Sense</span>
+        <div class="auth-subtitle">Register Your Fire Station</div>
+      </div>
+
+      <div id="reg-error" class="hidden" style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:var(--danger);border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:16px;font-size:14px;"></div>
+      <div id="reg-success" class="hidden confirm-box" style="margin-bottom:16px">
+        <div class="confirm-title">✅ Registered!</div>
+        <div class="confirm-msg">Your station has been registered. <a href="/login" style="color:var(--fire-orange)">Login now →</a></div>
+      </div>
+
+      <form id="reg-form" onsubmit="handleRegister(event)">
+        <div class="form-group">
+          <label class="label" for="reg-name">Station / Office Name *</label>
+          <input class="input" id="reg-name" type="text" placeholder="e.g. Bhopal Fire Station HQ" required/>
+        </div>
+        <div class="form-group">
+          <label class="label" for="reg-address">Address</label>
+          <input class="input" id="reg-address" type="text" placeholder="Street, City, State"/>
+        </div>
+        <div class="form-group">
+          <label class="label" for="reg-contact">Contact Number</label>
+          <input class="input" id="reg-contact" type="text" placeholder="+91-XXXXXXXXXX"/>
+        </div>
+
+        <div class="form-group">
+          <label class="label">📍 Station Location — Click on Map</label>
+          <div id="reg-map"></div>
+          <p class="map-hint">🖱️ Click anywhere in India on the map to set the station's exact location</p>
+        </div>
+
+        <div class="coord-row">
+          <div class="form-group">
+            <label class="label" for="reg-lat">Latitude *</label>
+            <input class="input" id="reg-lat" type="number" step="any" placeholder="e.g. 21.1458" required/>
+          </div>
+          <div class="form-group">
+            <label class="label" for="reg-lng">Longitude *</label>
+            <input class="input" id="reg-lng" type="number" step="any" placeholder="e.g. 79.0882" required/>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="label" for="reg-pass">Password *</label>
+          <input class="input" id="reg-pass" type="password" placeholder="Min 6 characters" required minlength="6"/>
+        </div>
+        <div class="form-group">
+          <label class="label" for="reg-pass2">Confirm Password *</label>
+          <input class="input" id="reg-pass2" type="password" placeholder="Repeat password" required/>
+        </div>
+
+        <button class="btn btn-primary btn-full" type="submit" id="reg-btn">
+          🏢 Register Station
+        </button>
+      </form>
+
+      <div class="auth-footer" style="margin-top:20px">
+        Already registered? <a href="/login">Login here →</a>
+      </div>
+    </div>
+  </div>
+  <div class="toast-container" id="toast-container"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/static/js/auth.js"></script>
+</body>
+</html>

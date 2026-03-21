@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FireSense — Fire Department Dashboard</title>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    body { overflow: hidden; }
+    .dash-layout { display: flex; flex-direction: column; height: 100vh; }
+    .dash-body { flex: 1; display: grid; grid-template-columns: 300px 1fr; overflow: hidden; }
+    .notif-badge { background: var(--fire-red); color: white; border-radius: 99px;
+      padding: 2px 8px; font-size: 11px; font-weight: 700; margin-left: 6px; }
+    .office-name-display { font-size: 14px; color: var(--text-muted); }
+    .office-name-display strong { color: var(--fire-orange); }
+    .new-alert-banner {
+      background: linear-gradient(90deg, rgba(255,69,0,0.15), rgba(255,107,53,0.08));
+      border: 1px solid rgba(255,69,0,0.4);
+      border-radius: var(--radius-sm); padding: 12px 16px;
+      display: flex; align-items: center; gap: 10px;
+      font-size: 13px; font-weight: 600; color: var(--fire-orange);
+      position: sticky; top: 0; z-index: 50;
+      animation: slideUp 0.4s ease;
+    }
+    .progress-bar {
+      height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 8px;
+    }
+    .progress-fill {
+      height: 100%; border-radius: 3px;
+      background: linear-gradient(90deg, var(--fire-red), var(--fire-orange));
+      transition: width 0.5s ease;
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .dash-tabs { display: flex; gap: 4px; margin-bottom: 20px; }
+    .dash-tab-btn {
+      padding: 10px 20px; border: none; border-radius: var(--radius-sm);
+      background: var(--bg-panel); color: var(--text-muted);
+      font-family: 'Inter', sans-serif; font-weight: 500; font-size: 14px;
+      cursor: pointer; transition: var(--transition); border: 1px solid var(--border);
+    }
+    .dash-tab-btn.active {
+      background: linear-gradient(135deg, var(--fire-red), var(--fire-orange));
+      color: white; border-color: transparent;
+    }
+    .empty-state { text-align: center; padding: 60px 20px; color: var(--text-muted); }
+    .empty-state-icon { font-size: 48px; margin-bottom: 12px; }
+    .tip-chip {
+      background: rgba(255,184,48,0.1); border: 1px solid rgba(255,184,48,0.3);
+      border-radius: 99px; padding: 4px 12px; font-size: 12px;
+      color: var(--fire-yellow); display: inline-flex; align-items: center; gap: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="dash-layout">
+
+    <!-- TOP NAV -->
+    <nav class="dash-navbar">
+      <div class="flex gap-3">
+        <div class="dash-logo">🔥 FireSense</div>
+        <span class="badge badge-pending" style="font-size:11px">🇮🇳 India</span>
+      </div>
+      <div class="flex gap-3" style="align-items:center">
+        <div class="office-name-display">Station: <strong id="office-name-lbl">—</strong></div>
+        <button class="btn btn-ghost btn-sm" id="alert-bell-btn" title="New Alerts">
+          🔔 <span class="notif-badge hidden" id="notif-count">0</span>
+        </button>
+        <button class="btn btn-secondary btn-sm" onclick="exportPDF()">📄 Export PDF</button>
+        <button class="btn btn-ghost btn-sm" onclick="logout()">⬅ Logout</button>
+      </div>
+    </nav>
+
+    <div class="dash-body">
+
+      <!-- SIDEBAR -->
+      <aside class="dash-sidebar">
+        <div class="sidebar-header">
+          <div style="font-size:13px; font-weight:700; margin-bottom:10px; color:var(--fire-orange)">
+            📋 Incident Reports
+          </div>
+          <input class="input" id="search-input" type="text" placeholder="🔍 Search..." oninput="filterReports()" style="font-size:13px; padding:9px 12px"/>
+        </div>
+
+        <div class="sidebar-filters">
+          <select class="select" id="filter-status" onchange="loadReports()" style="font-size:13px;padding:8px 12px">
+            <option value="All">All Statuses</option>
+            <option value="Pending">Pending</option>
+            <option value="Dispatched">Dispatched</option>
+            <option value="Resolved">Resolved</option>
+          </select>
+          <select class="select" id="filter-severity" onchange="loadReports()" style="font-size:13px;padding:8px 12px">
+            <option value="All">All Severities</option>
+            <option value="Small">Small</option>
+            <option value="Medium">Medium</option>
+            <option value="Large">Large</option>
+          </select>
+          <input class="input" type="date" id="filter-date" onchange="loadReports()" style="font-size:13px;padding:8px 12px"/>
+          <button class="btn btn-ghost btn-sm" onclick="clearFilters()">✖ Clear Filters</button>
+        </div>
+
+        <div class="sidebar-list" id="report-list">
+          <div class="empty-state">
+            <div class="empty-state-icon">📭</div>
+            <div>No reports yet</div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- MAIN CONTENT -->
+      <main class="dash-content" id="dash-content">
+
+        <!-- New alert banner -->
+        <div id="new-alert-banner" class="hidden new-alert-banner" style="margin-bottom:16px">
+          🚨 <span id="new-alert-text">New emergency report received!</span>
+          <button class="btn btn-sm btn-primary" style="margin-left:auto" onclick="dismissBanner()">View</button>
+        </div>
+
+        <!-- TABS -->
+        <div class="dash-tabs">
+          <button class="dash-tab-btn active" onclick="switchDashTab('overview')" id="dtab-overview">📊 Overview</button>
+          <button class="dash-tab-btn" onclick="switchDashTab('report')" id="dtab-report">📋 Report Detail</button>
+          <button class="dash-tab-btn" onclick="switchDashTab('map')" id="dtab-map">🗺️ Map View</button>
+        </div>
+
+        <!-- OVERVIEW TAB -->
+        <div id="tab-overview" class="tab-content active">
+          <div class="stats-bar">
+            <div class="stat-card">
+              <div class="stat-value" id="stat-total">0</div>
+              <div class="stat-label">Total Reports</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" style="color:var(--warning)" id="stat-pending">0</div>
+              <div class="stat-label">Pending</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" style="color:var(--info)" id="stat-dispatched">0</div>
+              <div class="stat-label">Dispatched</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" style="color:var(--success)" id="stat-resolved">0</div>
+              <div class="stat-label">Resolved</div>
+            </div>
+          </div>
+
+          <!-- Severity bar -->
+          <div class="card" style="margin-bottom:20px">
+            <div style="font-size:15px;font-weight:700;margin-bottom:14px">🔥 Severity Breakdown</div>
+            <div class="flex gap-4" style="margin-bottom:10px">
+              <div style="flex:1">
+                <div style="font-size:12px;color:var(--success);margin-bottom:4px;font-weight:600">SMALL</div>
+                <div class="progress-bar"><div class="progress-fill" id="bar-small" style="width:0%;background:var(--success)"></div></div>
+              </div>
+              <div style="flex:1">
+                <div style="font-size:12px;color:var(--warning);margin-bottom:4px;font-weight:600">MEDIUM</div>
+                <div class="progress-bar"><div class="progress-fill" id="bar-medium" style="width:0%;background:var(--warning)"></div></div>
+              </div>
+              <div style="flex:1">
+                <div style="font-size:12px;color:var(--danger);margin-bottom:4px;font-weight:600">LARGE</div>
+                <div class="progress-bar"><div class="progress-fill" id="bar-large" style="width:0%;background:var(--danger)"></div></div>
+              </div>
+            </div>
+            <div class="flex gap-3" style="font-size:13px;color:var(--text-muted)">
+              <span>🟢 Small: <strong id="stat-small">0</strong></span>
+              <span>🟡 Medium: <strong id="stat-medium">0</strong></span>
+              <span>🔴 Large: <strong id="stat-large">0</strong></span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div style="font-size:15px;font-weight:700;margin-bottom:12px">💡 Quick Actions</div>
+            <div class="flex gap-3 flex-wrap">
+              <button class="btn btn-secondary btn-sm" onclick="loadReports()">🔄 Refresh Reports</button>
+              <button class="btn btn-secondary btn-sm" onclick="exportPDF()">📄 Export PDF</button>
+              <button class="btn btn-ghost btn-sm" onclick="switchDashTab('map')">🗺️ View Map</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- REPORT DETAIL TAB -->
+        <div id="tab-report" class="tab-content">
+          <div id="report-detail-placeholder" class="empty-state">
+            <div class="empty-state-icon">👈</div>
+            <div>Select a report from the sidebar to view details</div>
+          </div>
+          <div id="report-detail" class="hidden detail-panel">
+            <!-- Dynamic content will be filled by dashboard.js -->
+          </div>
+        </div>
+
+        <!-- MAP TAB -->
+        <div id="tab-map" class="tab-content">
+          <div class="card" style="margin-bottom:16px; padding:16px 20px">
+            <div style="font-size:15px;font-weight:700;margin-bottom:4px">🗺️ Incident Map — India</div>
+            <div style="font-size:13px;color:var(--text-muted)">All incoming fire reports plotted geographically. Red markers = reports, blue = your station.</div>
+          </div>
+          <div class="map-panel-container" style="height:calc(100vh - 280px)">
+            <div id="dashboard-map" style="width:100%;height:100%"></div>
+          </div>
+        </div>
+
+      </main><!-- /.dash-content -->
+    </div><!-- /.dash-body -->
+  </div><!-- /.dash-layout -->
+
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

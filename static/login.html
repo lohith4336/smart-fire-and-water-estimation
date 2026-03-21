@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FireSense — Fire Department Login</title>
+  <meta name="description" content="Fire Department login portal for FireSense — access your incident dashboard."/>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+</head>
+<body>
+  <div class="auth-page">
+    <div class="auth-card">
+      <div class="auth-logo">🔥 Fire<span>Sense</span>
+        <div class="auth-subtitle">Fire Department Portal</div>
+      </div>
+
+      <div id="login-error" class="hidden" style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:var(--danger);border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:16px;font-size:14px;"></div>
+
+      <form id="login-form" onsubmit="handleLogin(event)">
+        <div class="form-group">
+          <label class="label" for="login-name">Office Name</label>
+          <input class="input" id="login-name" type="text" placeholder="e.g. Mumbai Fire Brigade – HQ" required autocomplete="organization"/>
+        </div>
+        <div class="form-group">
+          <label class="label" for="login-pass">Password</label>
+          <input class="input" id="login-pass" type="password" placeholder="••••••••" required/>
+        </div>
+        <button class="btn btn-primary btn-full btn-lg" type="submit" id="login-btn">
+          🚒 Login to Dashboard
+        </button>
+      </form>
+
+      <div class="divider"><span>or</span></div>
+
+      <div class="auth-footer">
+        New fire office? <a href="/register">Register your station →</a>
+      </div>
+      <div class="auth-footer" style="margin-top:10px">
+        <a href="/" style="color:var(--text-muted)">← Back to Citizen Portal</a>
+      </div>
+
+      <div style="margin-top:24px;background:var(--bg-panel);border-radius:var(--radius-sm);padding:14px;font-size:12px;color:var(--text-muted)">
+        <strong style="color:var(--fire-orange)">Demo Credentials</strong><br/>
+        Any pre-seeded office name + password: <code style="color:var(--text-primary)">office123</code><br/>
+        e.g. <em>Mumbai Fire Brigade – HQ</em>
+      </div>
+    </div>
+  </div>
+  <div class="toast-container" id="toast-container"></div>
+  <script src="/static/js/auth.js"></script>
+</body>
+</html>

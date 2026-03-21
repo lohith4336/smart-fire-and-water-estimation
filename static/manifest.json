@@ -1,0 +1,33 @@
+{
+  "name": "FireSense",
+  "short_name": "FireSense",
+  "description": "Report fires instantly — alert the nearest fire station across India",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0a0a",
+  "theme_color": "#FF4500",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets/Fire/3D/fire_3d.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets/Fire/3D/fire_3d.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Report Fire",
+      "short_name": "Report",
+      "description": "Quickly report a fire",
+      "url": "/",
+      "icons": [{ "src": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets/Fire/3D/fire_3d.png", "sizes": "96x96" }]
+    }
+  ],
+  "categories": ["utilities", "health"],
+  "lang": "en-IN"
+}

@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+.venv
+env/
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+# Flask session
+.flask_session/
+# Uploads and temporary files
+uploads/
+temp_*
+*.log
+# IDEs
+.vscode/
+.idea/
+.vs/

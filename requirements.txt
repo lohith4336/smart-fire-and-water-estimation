@@ -1,0 +1,7 @@
+flask>=3.0.0
+flask-jwt-extended>=4.6.0
+flask-cors>=4.0.0
+flask-limiter>=3.5.0
+Pillow>=10.0.0
+reportlab>=4.0.0
+bcrypt>=4.1.0
