@@ -19,3 +19,9 @@ temp_*
 .vscode/
 .idea/
 .vs/
+
+# AI Folders & Massive Models
+datasets/
+runs/
+*.h5
+fire_model.h5

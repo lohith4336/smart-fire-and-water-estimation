@@ -8,9 +8,21 @@ import random
 
 try:
     from PIL import Image
+    import colorsys
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
+
+# [ML HYBRID ENGINE INITIALIZATION]
+ML_MODEL = None
+try:
+    from ultralytics import YOLO
+    MODEL_PATH = os.path.join(os.path.dirname(__file__), 'yolo_fire_model.pt')
+    if os.path.exists(MODEL_PATH):
+        ML_MODEL = YOLO(MODEL_PATH)
+        print("✅ FireSense Hybrid ML Engine Active: Loaded yolo_fire_model.pt!")
+except Exception:
+    pass
 
 
 def analyze_fire_image(image_path: str | None) -> dict:
@@ -19,18 +31,51 @@ def analyze_fire_image(image_path: str | None) -> dict:
     Returns structured analysis result.
     """
     if image_path and os.path.exists(image_path) and PIL_AVAILABLE:
-        return _analyze_with_pil(image_path)
+        return _analyze_with_hybrid(image_path)
     else:
         # No image / PIL not available → use random realistic simulation
         return _simulate_analysis()
 
-
-def _analyze_with_pil(image_path: str) -> dict:
-    """Use PIL to detect fire via red/orange pixel ratio."""
+def _analyze_with_hybrid(image_path: str) -> dict:
+    """Hybrid Architecture: Uses true ML (if trained) for detection, and CV heuristics for severity sizing!"""
     try:
-        img = Image.open(image_path).convert('RGB')
-        img.thumbnail((400, 400))
-        pixels = list(img.getdata())
+        img_full = Image.open(image_path).convert('RGB')
+        
+        global ML_MODEL
+        if ML_MODEL is None:
+            # Hot-load the YOLO model if the user didn't restart the server after training!
+            MODEL_PATH = os.path.join(os.path.dirname(__file__), 'yolo_fire_model.pt')
+            if os.path.exists(MODEL_PATH):
+                from ultralytics import YOLO
+                ML_MODEL = YOLO(MODEL_PATH)
+                print("🔥 Dynamically Hot-Swapped YOLO Model into memory!")
+
+        # 1. Machine Learning Classification (If Trained via YOLO dataset)
+        ml_fire_prob = None
+        if ML_MODEL is not None:
+            try:
+                # YOLOv8 handles PIL directly, fast and native!
+                results = ML_MODEL(img_full, verbose=False)
+                probs = results[0].probs
+                names = results[0].names
+                
+                # YOLO maps classes however it wants. Dynamically find which index is "fire"
+                fire_idx = None
+                for k, v in names.items():
+                    if 'fire' in v.lower() and 'non' not in v.lower() and 'no' not in v.lower():
+                        fire_idx = k
+                        break
+                
+                if fire_idx is not None:
+                    ml_fire_prob = float(probs.data[fire_idx].item())
+                else:
+                    ml_fire_prob = float(probs.data[0].item())
+            except Exception as e:
+                print(f"YOLO Warning: {e}")
+        
+        # 2. Computer Vision Heuristics (Severity Estimation)
+        img_full.thumbnail((400, 400))
+        pixels = list(img_full.getdata())
         total = len(pixels)
 
         fire_pixels = 0
@@ -56,14 +101,41 @@ def _analyze_with_pil(image_path: str) -> dict:
                         medium_fire += 1
 
         ratio = fire_pixels / total if total > 0 else 0
-        fire_detected = ratio > 0.005
+        
+        # 3. Hybrid Decision Logic Engine
+        if ml_fire_prob is not None:
+            # Overriding heuristic detection with true Machine Learning!
+            # Since ml_fire_prob strictly maps to the YOLO 'fire' class exact probability:
+            fire_detected = bool(ml_fire_prob > 0.5) 
+            final_confidence = (ml_fire_prob * 100) if fire_detected else ((1.0 - ml_fire_prob) * 100)
+            
+            # --- HYBRID DUAL-VERIFICATION (ANTI-HALLUCINATION) ---
+            # Small AI models overfit to the color red/orange. If the AI thinks it's a fire (e.g. looking at a red car),
+            # but our mathematical color heuristics see virtually no actual fire-like pixels (ratio < 0.005),
+            # OR if the image is overwhelmingly a solid color wall (ratio > 0.75), VETO the AI!
+            if fire_detected:
+                if ratio < 0.005: 
+                    fire_detected = False
+                    final_confidence = 85.0 # AI hallucinated! Vetoed by color engine.
+                elif ratio > 0.75:
+                    fire_detected = False
+                    final_confidence = 90.0 # Too solid to be a real textured fire (e.g. solid red wall).
+
+            if not fire_detected:
+                ratio = 0.0 # Force heuristic sizing to 0 so it doesn't give fake severity
+        else:
+            # Fallback to standard CV pixel heuristics if ML is missing
+            fire_detected = ratio > 0.005
+            if ratio > 0.75:
+                fire_detected = False # Solid color rejection
+            final_confidence = min(99, 70 + (ratio * 100))
 
         if not fire_detected:
             return {
                 'fire_detected': False,
                 'severity': 'None',
                 'severity_color': '#9CA3AF',
-                'confidence': 95 + random.randint(0, 4),
+                'confidence': round(final_confidence, 2) if final_confidence else 95 + random.randint(0, 4),
                 'fire_pixel_ratio': round(ratio * 100, 1),
                 'water_liters': 0,
                 'water_display': '0 L',
@@ -73,29 +145,29 @@ def _analyze_with_pil(image_path: str) -> dict:
                 'analyzed_at': __import__('datetime').datetime.utcnow().isoformat()
             }
 
-        # Classify severity by ratio
+        # Classify severity by physical ratio on screen!
         if ratio < 0.02:
             severity = 'Tiny'
             water_min, water_max = 5, 20
-            confidence = 65 + random.randint(0, 10)
+            confidence = final_confidence if ml_fire_prob is not None else 65 + random.randint(0, 10)
         elif ratio < 0.08:
             severity = 'Small'
             water_min, water_max = 550, 1100
-            confidence = 72 + random.randint(0, 15)
+            confidence = final_confidence if ml_fire_prob is not None else 72 + random.randint(0, 15)
         elif ratio < 0.22:
             severity = 'Medium'
             water_min, water_max = 2200, 5500
-            confidence = 78 + random.randint(0, 12)
+            confidence = final_confidence if ml_fire_prob is not None else 78 + random.randint(0, 12)
         else:
             severity = 'Large'
             water_min, water_max = 11000, 18000
-            confidence = 85 + random.randint(0, 10)
+            confidence = final_confidence if ml_fire_prob is not None else 85 + random.randint(0, 10)
 
         water_base = random.uniform(water_min, water_max)
         water_with_buffer = water_base * 1.10  # +10% safety buffer
 
         # Simulate bounding box (center of image with size proportional to ratio)
-        w, h = img.size
+        w, h = img_full.size
         box_size = min(w, h) * math.sqrt(ratio) * 2.5
         cx, cy = w * 0.5, h * 0.5
         bbox = {
