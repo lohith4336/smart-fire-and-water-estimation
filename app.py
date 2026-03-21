@@ -95,7 +95,7 @@ def init_db():
             conn.execute("ALTER TABLE reports ADD COLUMN bounding_box TEXT")
 
 init_db()  # Initialize DB on import for Gunicorn/Render compatibility
-    # Database schema is ready. Users must now register fire stations manually.
+# Database schema is ready. Users must now register fire stations manually.
 
 # ─────────────────────────────────────────────
 #  Helpers
