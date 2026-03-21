@@ -81,55 +81,73 @@ def _analyze_with_hybrid(image_path: str) -> dict:
         pixels = list(img_full.getdata())
         total = len(pixels)
 
-        fire_pixels = 0
-        bright_fire  = 0
-        medium_fire  = 0
-        
+        # --- ADVANCED STRUCTURAL SCAN ---
+        fire_pixel_coords = []
         import colorsys
-        for r, g, b in pixels:
-            # Advanced Fire Heuristic using RGB & HSV
-            h, s, v = colorsys.rgb_to_hsv(r/255.0, g/255.0, b/255.0)
-            
-            # Fire characteristics:
-            # 1. High brightness (v > 0.65)
-            # 2. High saturation (s > 0.45)
-            # 3. Orange/Red/Yellow hue (h < 0.17 or h > 0.95)
-            # 4. Red dominance over green, green over blue
-            if v > 0.65 and s > 0.45 and (h <= 0.17 or h >= 0.95):
-                if r > g > b and r > 160:
-                    fire_pixels += 1
-                    if v > 0.85 and r > 220:
-                        bright_fire += 1
-                    elif v > 0.75:
-                        medium_fire += 1
+        
+        # We sample the image to find the "Structure" of the fire
+        for y in range(0, img_full.height, 2):
+            for x in range(0, img_full.width, 2):
+                r, g, b = img_full.getpixel((x, y))
+                h, s, v = colorsys.rgb_to_hsv(r/255.0, g/255.0, b/255.0)
+                
+                # Strict Flame Heuristic
+                # Real fire has high V, very high S, and stays within a tighter Hue (0.05 - 0.15)
+                # We specifically exclude the 'Deep Red' (0.95+) which is often just a sunset or red object.
+                if v > 0.70 and s > 0.55 and (0.04 <= h <= 0.16):
+                    if r > g * 1.2 and g > b:
+                        fire_pixels += 1
+                        fire_pixel_coords.append((x, y))
+                        if v > 0.90: bright_fire += 1
+                        elif v > 0.80: medium_fire += 1
 
-        ratio = fire_pixels / total if total > 0 else 0
+        total_sampled = (img_full.width // 2) * (img_full.height // 2)
+        ratio = fire_pixels / total_sampled if total_sampled > 0 else 0
+        
+        # --- SPATIAL DISPERSION CHECK (THE 'SUN' VETO) ---
+        is_chaotic = True
+        if fire_pixels > 20:
+            # Calculate the bounding box of detected pixels
+            xs = [p[0] for p in fire_pixel_coords]
+            ys = [p[1] for p in fire_pixel_coords]
+            min_x, max_x = min(xs), max(xs)
+            min_y, max_y = min(ys), max(ys)
+            width, height = (max_x - min_x) + 1, (max_y - min_y) + 1
+            
+            # Density: How much of the box is filled?
+            # A Sun is a dense circle (high density). Fire is scattered and jagged (lower density).
+            density = fire_pixels / (width * height / 4.0) # /4 because we sampled every 2nd pixel
+            
+            # Sun Veto: If it's a very tight, dense circular/solid block, reject it as a light source/sun
+            if density > 0.65 and ratio < 0.15:
+                is_chaotic = False # Too structured/solid to be a flickering flame
+        elif fire_pixels > 0:
+            is_chaotic = False # Too small to be sure, likely noise
+        else:
+            is_chaotic = False
         
         # 3. Hybrid Decision Logic Engine
         if ml_fire_prob is not None:
             # Overriding heuristic detection with true Machine Learning!
-            # Since ml_fire_prob strictly maps to the YOLO 'fire' class exact probability:
-            fire_detected = bool(ml_fire_prob > 0.5) 
+            # Increase threshold for AI: Small models need 85%+ confidence to veto the structure check
+            fire_detected = bool(ml_fire_prob > 0.82) 
             final_confidence = (ml_fire_prob * 100) if fire_detected else ((1.0 - ml_fire_prob) * 100)
             
             # --- HYBRID DUAL-VERIFICATION (ANTI-HALLUCINATION) ---
-            # Small AI models overfit to the color red/orange. If the AI thinks it's a fire (e.g. looking at a red car),
-            # but our mathematical color heuristics see virtually no actual fire-like pixels (ratio < 0.005),
-            # OR if the image is overwhelmingly a solid color wall (ratio > 0.75), VETO the AI!
             if fire_detected:
-                if ratio < 0.005: 
+                if not is_chaotic or ratio < 0.005: 
                     fire_detected = False
-                    final_confidence = 85.0 # AI hallucinated! Vetoed by color engine.
-                elif ratio > 0.75:
+                    final_confidence = 92.0 # Confidently rejected by Structure Analyser
+                elif ratio > 0.85:
                     fire_detected = False
-                    final_confidence = 90.0 # Too solid to be a real textured fire (e.g. solid red wall).
+                    final_confidence = 95.0 # Too solid to be real textured fire.
 
             if not fire_detected:
-                ratio = 0.0 # Force heuristic sizing to 0 so it doesn't give fake severity
+                ratio = 0.0 
         else:
             # Fallback to standard CV pixel heuristics if ML is missing
-            fire_detected = ratio > 0.005
-            if ratio > 0.75:
+            fire_detected = ratio > 0.008 and is_chaotic
+            if ratio > 0.85:
                 fire_detected = False # Solid color rejection
             final_confidence = min(99, 70 + (ratio * 100))
 
