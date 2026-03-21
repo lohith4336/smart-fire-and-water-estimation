@@ -25,12 +25,14 @@ app.config['JWT_SECRET_KEY'] = 'firesense-super-secret-key-2024'
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=8)
 app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024   # 50 MB
-
 CORS(app)
 jwt = JWTManager(app)
 limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "100 per hour"])
 
 DB_PATH = 'database.db'
+
+# Ensure upload directory exists
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # SSE clients: dict of office_id → list of queues
 import queue
@@ -92,6 +94,7 @@ def init_db():
         if 'bounding_box' not in cols:
             conn.execute("ALTER TABLE reports ADD COLUMN bounding_box TEXT")
 
+init_db()  # Initialize DB on import for Gunicorn/Render compatibility
     # Database schema is ready. Users must now register fire stations manually.
 
 # ─────────────────────────────────────────────
