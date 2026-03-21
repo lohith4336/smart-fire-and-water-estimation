@@ -94,13 +94,14 @@ def _analyze_with_hybrid(image_path: str) -> dict:
                 r, g, b = img_full.getpixel((x, y))
                 h, s, v = colorsys.rgb_to_hsv(r/255.0, g/255.0, b/255.0)
                 
-                # Strict Flame Heuristic
-                # Real fire has high V, very high S, and stays within a tighter Hue (0.05 - 0.15)
-                # We specifically exclude the 'Deep Red' (0.95+) which is often just a sunset or red object.
-                if v > 0.70 and s > 0.55 and (0.04 <= h <= 0.16):
-                    if r > g * 1.2 and g > b:
+                # Flame Heuristic: 
+                # Fire is Orange-Red (0.04-0.16) but has a very high diversity of Saturation.
+                # Sun Coronas have extremely High Saturation (0.85+) and are very structured.
+                if v > 0.70 and (0.04 <= h <= 0.16):
+                    # We look for the "chaotic" saturation signature of fire, not a solid sun-disc
+                    if s > 0.45 and r > g * 1.1: 
                         fire_pixels += 1
-                        fire_pixel_coords.append((x, y))
+                        fire_pixel_coords.append((x, y, s)) # Track saturation for variance check
                         if v > 0.90: bright_fire += 1
                         elif v > 0.80: medium_fire += 1
 
@@ -109,25 +110,31 @@ def _analyze_with_hybrid(image_path: str) -> dict:
         
         # --- SPATIAL DISPERSION CHECK (THE 'SUN' VETO) ---
         is_chaotic = True
-        if fire_pixels > 20:
-            # Calculate the bounding box of detected pixels
+        if fire_pixels > 25:
             xs = [p[0] for p in fire_pixel_coords]
             ys = [p[1] for p in fire_pixel_coords]
-            min_x, max_x = min(xs), max(xs)
-            min_y, max_y = min(ys), max(ys)
+            ss = [p[2] for p in fire_pixel_coords]
+            min_x, max_x, min_y, max_y = min(xs), max(xs), min(ys), max(ys)
             width, height = (max_x - min_x) + 1, (max_y - min_y) + 1
             
-            # Density: How much of the box is filled?
-            # A Sun is a dense circle (high density). Fire is scattered and jagged (lower density).
-            density = fire_pixels / (width * height / 4.0) # /4 because we sampled every 2nd pixel
+            # Density & Structure Logic
+            density = fire_pixels / (width * height / 4.0)
             
-            # Sun Veto: If it's a very tight, dense circular/solid block, reject it as a light source/sun
-            if density > 0.65 and ratio < 0.15:
-                is_chaotic = False # Too structured/solid to be a flickering flame
-        elif fire_pixels > 0:
-            is_chaotic = False # Too small to be sure, likely noise
+            # Aspect Ratio: Sun is 1.0. Fire is usually skewed.
+            aspect = width / height if height > 0 else 1
+            
+            # Variance in Saturation: Sun coronas are very uniform (low variance).
+            # Fire has high variance (hot cores vs cooler edges).
+            avg_s = sum(ss) / len(ss)
+            s_variance = sum((s - avg_s)**2 for s in ss) / len(ss)
+            
+            # THE VETO: Solid, non-chaotic, uniform circular objects are rejected
+            if 0.8 < aspect < 1.25 and density > 0.55 and s_variance < 0.02:
+                is_chaotic = False # Solid uniform circle found (likely the sun or a lamp)
+            elif density > 0.80:
+                is_chaotic = False # Perfectly solid block found (red wall/object)
         else:
-            is_chaotic = False
+            is_chaotic = False 
         
         # 3. Hybrid Decision Logic Engine
         if ml_fire_prob is not None:
