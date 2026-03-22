@@ -359,34 +359,55 @@ async function saveNotes(rid) {
 
 // ─── Dashboard Map ─────────────────────────────────────
 function initDashMap() {
-  dashMap = L.map('dashboard-map', {
-    center: [20.5937, 78.9629],
-    zoom: 5,
-    minZoom: 4,
-    maxZoom: 16,
-  });
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap', maxZoom: 19
-  }).addTo(dashMap);
-  const indiaBounds = L.latLngBounds([6.5, 68.0], [37.5, 98.0]);
-  dashMap.setMaxBounds(indiaBounds.pad(0.3));
+  const el = document.getElementById('dashboard-map');
+  if (!el) return;
+  
+  if (dashMap) {
+    dashMap.invalidateSize();
+    return;
+  }
 
-  // Mark own office
-  fetch('/api/offices').then(r => r.json()).then(offices => {
-    const mine = offices.find(o => o.id === officeId);
-    if (mine) {
-      L.marker([mine.lat, mine.lng], {
-        icon: L.divIcon({ html: '<div style="font-size:24px">🚒</div>', className: 'custom-marker-icon', iconAnchor: [12,12] })
-      }).addTo(dashMap).bindPopup(`<strong style="color:#3B82F6">🏢 ${mine.name}</strong><br/>(Your Station)`);
-    }
-  }).catch(() => {});
+  try {
+    dashMap = L.map('dashboard-map', {
+      center: [20.5937, 78.9629],
+      zoom: 5,
+      minZoom: 4,
+      maxZoom: 16,
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap', maxZoom: 19
+    }).addTo(dashMap);
+    const indiaBounds = L.latLngBounds([6.5, 68.0], [37.5, 98.0]);
+    dashMap.setMaxBounds(indiaBounds.pad(0.3));
+
+    // Mark own office
+    fetch('/api/offices').then(r => r.json()).then(offices => {
+      if (!dashMap) return; // Map was destroyed
+      const mine = offices.find(o => o.id === officeId);
+      if (mine) {
+        L.marker([mine.lat, mine.lng], {
+          icon: L.divIcon({ html: '<div style="font-size:24px">🚒</div>', className: 'custom-marker-icon', iconAnchor: [12,12] })
+        }).addTo(dashMap).bindPopup(`<strong style="color:#3B82F6">🏢 ${mine.name}</strong><br/>(Your Station)`);
+      }
+    }).catch(() => {});
+  } catch(e) {
+    console.error('DashMap init error:', e);
+    destroyDashMap();
+  }
 }
 
 function updateMapMarkers() {
-  reportMarkers.forEach(m => dashMap.removeLayer(m));
+  if (!dashMap) return; // Map not initialized or was destroyed
+  
+  reportMarkers.forEach(m => {
+    try {
+      dashMap.removeLayer(m);
+    } catch(e) {}
+  });
   reportMarkers = [];
 
   allReports.forEach(r => {
+    if (!dashMap) return; // Safety check
     const color = { Pending: '🔴', Dispatched: '🟡', Resolved: '🟢' }[r.status] || '🔴';
     const m = L.marker([r.citizen_lat, r.citizen_lng], {
       icon: L.divIcon({ html: `<div style="font-size:20px">${color}</div>`, className: 'custom-marker-icon', iconAnchor: [10,10] })

@@ -1,15 +1,14 @@
 import os
 import uuid
 import json
-import time
 import math
-import base64
+import queue
 import sqlite3
 import bcrypt
 from datetime import datetime, timedelta
 from io import BytesIO
 from flask import (Flask, request, jsonify, send_from_directory,
-                   Response, stream_with_context, redirect, url_for, send_file)
+                   Response, stream_with_context, send_file)
 from flask_jwt_extended import (JWTManager, create_access_token,
                                  jwt_required, get_jwt_identity)
 from flask_cors import CORS
@@ -27,18 +26,28 @@ app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024   # 50 MB
 CORS(app)
 jwt = JWTManager(app)
-limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "100 per hour"])
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[
+        "200 per day",
+        "100 per hour"])
 
-# ── Global Error Handlers (always return JSON — never empty response) ──────────
+# ── Global Error Handlers (always return JSON — never empty response) ───
+
+
 @app.errorhandler(Exception)
 def handle_any_exception(e):
     import traceback
     traceback.print_exc()
     return jsonify({'error': f'Internal server error: {str(e)}'}), 500
 
+
 @app.errorhandler(429)
 def handle_rate_limit(e):
-    return jsonify({'error': 'Too many requests. Please wait a moment and try again.'}), 429
+    return jsonify(
+        {'error': 'Too many requests. Please wait a moment and try again.'}), 429
+
 
 @app.errorhandler(404)
 def handle_not_found(e):
@@ -51,16 +60,18 @@ DB_PATH = 'database.db'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # SSE clients: dict of office_id → list of queues
-import queue
 sse_clients = {}   # office_id → [queue, ...]
 
 # ─────────────────────────────────────────────
 #  Database
 # ─────────────────────────────────────────────
+
+
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
 
 def init_db():
     with get_db() as conn:
@@ -96,9 +107,11 @@ def init_db():
         );
         """)
 
-    # Migration: add citizen_name and citizen_phone columns if they don't exist yet
+    # Migration: add citizen_name and citizen_phone columns if they don't
+    # exist yet
     with get_db() as conn:
-        cols = [row[1] for row in conn.execute("PRAGMA table_info(reports)").fetchall()]
+        cols = [row[1] for row in conn.execute(
+            "PRAGMA table_info(reports)").fetchall()]
         if 'citizen_name' not in cols:
             conn.execute("ALTER TABLE reports ADD COLUMN citizen_name TEXT")
         if 'citizen_phone' not in cols:
@@ -106,7 +119,8 @@ def init_db():
         if 'confidence' not in cols:
             conn.execute("ALTER TABLE reports ADD COLUMN confidence REAL")
         if 'fire_pixel_ratio' not in cols:
-            conn.execute("ALTER TABLE reports ADD COLUMN fire_pixel_ratio REAL")
+            conn.execute(
+                "ALTER TABLE reports ADD COLUMN fire_pixel_ratio REAL")
         if 'bounding_box' not in cols:
             conn.execute("ALTER TABLE reports ADD COLUMN bounding_box TEXT")
         if 'severity' not in cols:
@@ -116,7 +130,9 @@ def init_db():
         if 'equipment' not in cols:
             conn.execute("ALTER TABLE reports ADD COLUMN equipment TEXT")
         if 'analysis_done' not in cols:
-            conn.execute("ALTER TABLE reports ADD COLUMN analysis_done INTEGER DEFAULT 0")
+            conn.execute(
+                "ALTER TABLE reports ADD COLUMN analysis_done INTEGER DEFAULT 0")
+
 
 init_db()  # Initialize DB on import for Gunicorn/Render compatibility
 # Database schema is ready. Users must now register fire stations manually.
@@ -124,13 +140,17 @@ init_db()  # Initialize DB on import for Gunicorn/Render compatibility
 # ─────────────────────────────────────────────
 #  Helpers
 # ─────────────────────────────────────────────
+
+
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
     dlam = math.radians(lon2 - lon1)
-    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlam/2)**2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    a = math.sin(dphi / 2)**2 + math.cos(phi1) * \
+        math.cos(phi2) * math.sin(dlam / 2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
 
 def nearest_office(lat, lng):
     with get_db() as conn:
@@ -138,6 +158,7 @@ def nearest_office(lat, lng):
     if not offices:
         return None
     return min(offices, key=lambda o: haversine(lat, lng, o['lat'], o['lng']))
+
 
 def push_sse(office_id, data: dict):
     if office_id in sse_clients:
@@ -147,27 +168,34 @@ def push_sse(office_id, data: dict):
             except Exception:
                 pass
 
+
 def allowed_file(filename, types):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in types
 
 # ─────────────────────────────────────────────
 #  Page Routes
 # ─────────────────────────────────────────────
+
+
 @app.route('/')
 def index():
     return send_from_directory('static', 'index.html')
+
 
 @app.route('/login')
 def login_page():
     return send_from_directory('static', 'index.html')
 
+
 @app.route('/register')
 def register_page():
     return send_from_directory('static', 'index.html')
 
+
 @app.route('/dashboard')
 def dashboard_page():
     return send_from_directory('static', 'index.html')
+
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
@@ -177,28 +205,53 @@ def health_check():
 # ─────────────────────────────────────────────
 #  Auth Endpoints
 # ─────────────────────────────────────────────
+
+
 @app.route('/api/analyze-media', methods=['POST'])
 @limiter.limit("50 per hour")
 def api_analyze_media():
     image_path = None
     file_id = str(uuid.uuid4())
-    if 'image' in request.files:
-        f = request.files['image']
-        if f:
-            fname = f"temp_{file_id}.jpg"
-            os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-            full_path = os.path.join(app.config['UPLOAD_FOLDER'], fname)
-            f.save(full_path)
-            image_path = full_path
+    
+    if 'image' not in request.files:
+        return jsonify({'error': 'No image provided'}), 400
+        
+    f = request.files['image']
+    if not f or f.filename == '':
+        return jsonify({'error': 'Image file is empty'}), 400
+    
+    try:
+        fname = f"temp_{file_id}.jpg"
+        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+        full_path = os.path.join(app.config['UPLOAD_FOLDER'], fname)
+        f.save(full_path)
+        
+        # Verify file was actually saved
+        if not os.path.exists(full_path):
+            return jsonify({'error': 'Failed to save image'}), 500
+            
+        image_path = full_path
+        
+        # Run analysis
+        result = analyze_fire_image(image_path)
+        
+        # Ensure result is never None
+        if result is None:
+            result = {'fire_detected': False, 'severity': 'None', 'confidence': 0}
+        
+        return jsonify(result)
+    
+    except Exception as e:
+        return jsonify({'error': f'Analysis failed: {str(e)}'}), 500
+    
+    finally:
+        # Cleanup temp file
+        if image_path and os.path.exists(image_path):
+            try:
+                os.remove(image_path)
+            except Exception:
+                pass
 
-    # Run analysis
-    result = analyze_fire_image(image_path)
-
-    # Cleanup temp file
-    if image_path and os.path.exists(image_path):
-        os.remove(image_path)
-
-    return jsonify(result)
 
 @app.route('/api/auth/register', methods=['POST'])
 def api_register():
@@ -207,17 +260,23 @@ def api_register():
     if not all(k in data for k in required):
         return jsonify({'error': 'Missing required fields'}), 400
     with get_db() as conn:
-        existing = conn.execute("SELECT id FROM fire_offices WHERE name=?", (data['name'],)).fetchone()
+        existing = conn.execute(
+            "SELECT id FROM fire_offices WHERE name=?", (data['name'],)).fetchone()
         if existing:
             return jsonify({'error': 'Office name already registered'}), 409
-        pw_hash = bcrypt.hashpw(data['password'].encode(), bcrypt.gensalt()).decode()
+        pw_hash = bcrypt.hashpw(
+            data['password'].encode(),
+            bcrypt.gensalt()).decode()
         oid = str(uuid.uuid4())
         conn.execute(
-            "INSERT INTO fire_offices VALUES (?,?,?,?,?,?,?,?)",
-            (oid, data['name'], data.get('address',''), float(data['lat']), float(data['lng']),
-             data.get('contact',''), pw_hash, datetime.utcnow().isoformat())
-        )
-    return jsonify({'message': 'Office registered successfully', 'id': oid}), 201
+            "INSERT INTO fire_offices VALUES (?,?,?,?,?,?,?,?)", (oid, data['name'], data.get(
+                'address', ''), float(
+                data['lat']), float(
+                data['lng']), data.get(
+                    'contact', ''), pw_hash, datetime.utcnow().isoformat()))
+    return jsonify(
+        {'message': 'Office registered successfully', 'id': oid}), 201
+
 
 @app.route('/api/auth/login', methods=['POST'])
 def api_login():
@@ -225,15 +284,19 @@ def api_login():
     if not data or 'name' not in data or 'password' not in data:
         return jsonify({'error': 'Name and password required'}), 400
     with get_db() as conn:
-        office = conn.execute("SELECT * FROM fire_offices WHERE name=?", (data['name'],)).fetchone()
+        office = conn.execute(
+            "SELECT * FROM fire_offices WHERE name=?", (data['name'],)).fetchone()
     if not office:
         return jsonify({'error': 'Invalid credentials'}), 401
-    if not bcrypt.checkpw(data['password'].encode(), office['password'].encode()):
+    if not bcrypt.checkpw(
+            data['password'].encode(),
+            office['password'].encode()):
         return jsonify({'error': 'Invalid credentials'}), 401
-    token = create_access_token(identity=json.dumps({'id': office['id'], 'name': office['name']}))
+    token = create_access_token(identity=json.dumps(
+        {'id': office['id'], 'name': office['name']}))
     return jsonify({
-        'token': token, 
-        'office_id': office['id'], 
+        'token': token,
+        'office_id': office['id'],
         'office_name': office['name'],
         'lat': office['lat'],
         'lng': office['lng']
@@ -242,11 +305,15 @@ def api_login():
 # ─────────────────────────────────────────────
 #  Fire Offices
 # ─────────────────────────────────────────────
+
+
 @app.route('/api/offices', methods=['GET'])
 def api_offices():
     with get_db() as conn:
-        rows = conn.execute("SELECT id,name,address,lat,lng,contact FROM fire_offices").fetchall()
+        rows = conn.execute(
+            "SELECT id,name,address,lat,lng,contact FROM fire_offices").fetchall()
     return jsonify([dict(r) for r in rows])
+
 
 @app.route('/api/offices/nearest', methods=['GET'])
 def api_nearest():
@@ -262,12 +329,30 @@ def api_nearest():
     return jsonify({
         'id': office['id'], 'name': office['name'],
         'address': office['address'], 'lat': office['lat'], 'lng': office['lng'],
-        'contact': office['contact'], 'distance_km': round(dist, 2)
+        'contact': office['contact'], 'distance_km': float(f"{dist:.2f}")
     })
+
+
+@app.route('/api/offices/me', methods=['DELETE'])
+@jwt_required()
+def delete_my_office():
+    identity = json.loads(get_jwt_identity())
+    office_id = identity['id']
+
+    with get_db() as conn:
+        # 1. Delete associated reports first to avoid orphans
+        conn.execute("DELETE FROM reports WHERE office_id=?", (office_id,))
+        # 2. Delete the office itself
+        conn.execute("DELETE FROM fire_offices WHERE id=?", (office_id,))
+
+    return jsonify({'message': 'Account and all associated records deleted successfully'}), 200
+
 
 # ─────────────────────────────────────────────
 #  Citizen Report Submission
 # ─────────────────────────────────────────────
+
+
 @app.route('/api/reports', methods=['POST'])
 @limiter.limit("50 per hour")
 def api_submit_report():
@@ -276,7 +361,7 @@ def api_submit_report():
         citizen_lat = request.form.get('lat')
         citizen_lng = request.form.get('lng')
         address_hint = request.form.get('address', '')
-        citizen_name  = request.form.get('citizen_name', '').strip()
+        citizen_name = request.form.get('citizen_name', '').strip()
         citizen_phone = request.form.get('citizen_phone', '').strip()
 
         if not citizen_lat or not citizen_lng:
@@ -288,7 +373,8 @@ def api_submit_report():
         # Find nearest office
         office = nearest_office(citizen_lat, citizen_lng)
         if not office:
-            return jsonify({'error': 'No fire station is registered yet. Please ask your local fire station to register first.'}), 404
+            return jsonify(
+                {'error': 'No fire station is registered yet. Please ask your local fire station to register first.'}), 404
 
         report_id = str(uuid.uuid4())
         image_path = None
@@ -298,12 +384,19 @@ def api_submit_report():
         if 'image' in request.files:
             f = request.files['image']
             if f and f.filename:
-                mime_map = {'image/jpeg':'jpg','image/png':'png','image/webp':'webp','image/gif':'gif'}
-                ext = mime_map.get(f.content_type)
+                mime_map = {
+                    'image/jpeg': 'jpg',
+                    'image/png': 'png',
+                    'image/webp': 'webp',
+                    'image/gif': 'gif'}
+                ext = mime_map.get(str(f.content_type)
+                                   if f.content_type else '')
                 if not ext and '.' in (f.filename or ''):
-                    cand = f.filename.rsplit('.',1)[1].lower()
-                    ext = cand if cand in {'png','jpg','jpeg','gif','webp'} else None
-                    if ext == 'jpeg': ext = 'jpg'
+                    cand = f.filename.rsplit('.', 1)[1].lower()
+                    ext = cand if cand in {
+                        'png', 'jpg', 'jpeg', 'gif', 'webp'} else None
+                    if ext == 'jpeg':
+                        ext = 'jpg'
                 if ext:
                     fname = f'{report_id}_img.{ext}'
                     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -314,11 +407,16 @@ def api_submit_report():
         if 'video' in request.files:
             f = request.files['video']
             if f and f.filename:
-                mime_map_v = {'video/webm':'webm','video/mp4':'mp4','video/quicktime':'mov'}
-                ext = mime_map_v.get(f.content_type)
+                mime_map_v = {
+                    'video/webm': 'webm',
+                    'video/mp4': 'mp4',
+                    'video/quicktime': 'mov'}
+                ext = mime_map_v.get(str(f.content_type)
+                                     if f.content_type else '')
                 if not ext and '.' in (f.filename or ''):
-                    cand = f.filename.rsplit('.',1)[1].lower()
-                    ext = cand if cand in {'mp4','webm','mov','avi'} else None
+                    cand = f.filename.rsplit('.', 1)[1].lower()
+                    ext = cand if cand in {
+                        'mp4', 'webm', 'mov', 'avi'} else None
                 if ext:
                     fname = f'{report_id}_vid.{ext}'
                     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -333,19 +431,27 @@ def api_submit_report():
             if analysis_data_str:
                 result = json.loads(analysis_data_str)
             else:
-                full_img_path = os.path.join('static', image_path) if image_path else None
+                full_img_path = os.path.join(
+                    'static', image_path) if image_path else None
                 result = analyze_fire_image(full_img_path)
         except Exception:
-            result = {'severity': None, 'water_liters': None, 'equipment': None,
-                      'confidence': None, 'fire_pixel_ratio': None, 'bounding_box': None,
-                      'safety_tips': []}
+            result = {
+                'severity': None,
+                'water_liters': None,
+                'equipment': None,
+                'confidence': None,
+                'fire_pixel_ratio': None,
+                'bounding_box': None,
+                'safety_tips': []}
 
-        severity         = result.get('severity')
-        water_liters     = result.get('water_liters')
-        equipment        = json.dumps(result.get('equipment')) if result.get('equipment') else None
-        confidence       = result.get('confidence')
+        severity = result.get('severity')
+        water_liters = result.get('water_liters')
+        equipment = json.dumps(
+            result.get('equipment')) if result.get('equipment') else None
+        confidence = result.get('confidence')
         fire_pixel_ratio = result.get('fire_pixel_ratio')
-        bounding_box     = json.dumps(result.get('bounding_box')) if result.get('bounding_box') else None
+        bounding_box = json.dumps(
+            result.get('bounding_box')) if result.get('bounding_box') else None
 
         with get_db() as conn:
             conn.execute(
@@ -370,12 +476,13 @@ def api_submit_report():
             'severity': severity
         })
 
+        dist_val = haversine(citizen_lat, citizen_lng, office['lat'], office['lng'])
         return jsonify({
             'message': f"Report sent to {office['name']} — they have been alerted.",
             'office_name': office['name'],
             'office_contact': office['contact'],
             'report_id': report_id,
-            'distance_km': round(haversine(citizen_lat, citizen_lng, office['lat'], office['lng']), 2),
+            'distance_km': float(f"{dist_val:.2f}"),
             'severity': severity,
             'water_liters': water_liters,
             'safety_tips': result.get('safety_tips', [])
@@ -386,48 +493,55 @@ def api_submit_report():
         traceback.print_exc()
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 
+
 @app.route('/api/analyze', methods=['POST'])
 def api_citizen_analyze():
     """Run fire analysis without saving to the DB."""
     import uuid
     media = request.files.get('media')
     if media and media.filename:
-        ext = media.filename.rsplit('.', 1)[-1].lower() if '.' in media.filename else 'jpg'
+        ext = media.filename.rsplit(
+            '.', 1)[-1].lower() if '.' in media.filename else 'jpg'
         temp_filename = f"temp_{uuid.uuid4().hex}.{ext}"
         temp_path = os.path.join(app.config['UPLOAD_FOLDER'], temp_filename)
         media.save(temp_path)
-        
+
         analysis = analyze_fire_image(temp_path)
         try:
             os.remove(temp_path)
         except Exception:
             pass
         return jsonify(analysis), 200
-        
+
     return jsonify(analyze_fire_image(None)), 200
 
 # ─────────────────────────────────────────────
 #  Dashboard — Reports
 # ─────────────────────────────────────────────
+
+
 @app.route('/api/reports', methods=['GET'])
 @jwt_required()
 def api_get_reports():
     identity = json.loads(get_jwt_identity())
     office_id = identity['id']
 
-    status_filter  = request.args.get('status')
+    status_filter = request.args.get('status')
     severity_filter = request.args.get('severity')
-    date_filter    = request.args.get('date')  # YYYY-MM-DD
+    date_filter = request.args.get('date')  # YYYY-MM-DD
 
     query = "SELECT * FROM reports WHERE office_id=?"
     params = [office_id]
 
     if status_filter and status_filter != 'All':
-        query += " AND status=?"; params.append(status_filter)
+        query += " AND status=?"
+        params.append(status_filter)
     if severity_filter and severity_filter != 'All':
-        query += " AND severity=?"; params.append(severity_filter)
+        query += " AND severity=?"
+        params.append(severity_filter)
     if date_filter:
-        query += " AND submitted_at LIKE ?"; params.append(f"{date_filter}%")
+        query += " AND submitted_at LIKE ?"
+        params.append(f"{date_filter}%")
 
     query += " ORDER BY submitted_at DESC"
 
@@ -435,6 +549,7 @@ def api_get_reports():
         rows = conn.execute(query, params).fetchall()
 
     return jsonify([dict(r) for r in rows])
+
 
 @app.route('/api/reports/<rid>/status', methods=['PATCH'])
 @jwt_required()
@@ -451,6 +566,7 @@ def api_update_status(rid):
         )
     return jsonify({'message': 'Status updated'})
 
+
 @app.route('/api/reports/<rid>/notes', methods=['PATCH'])
 @jwt_required()
 def api_update_notes(rid):
@@ -459,16 +575,20 @@ def api_update_notes(rid):
     with get_db() as conn:
         conn.execute(
             "UPDATE reports SET notes=? WHERE id=? AND office_id=?",
-            (data.get('notes',''), rid, identity['id'])
+            (data.get('notes', ''), rid, identity['id'])
         )
     return jsonify({'message': 'Notes updated'})
+
 
 @app.route('/api/reports/<rid>', methods=['DELETE'])
 @jwt_required()
 def api_delete_report(rid):
     identity = json.loads(get_jwt_identity())
     with get_db() as conn:
-        conn.execute("DELETE FROM reports WHERE id=? AND office_id=?", (rid, identity['id']))
+        conn.execute(
+            "DELETE FROM reports WHERE id=? AND office_id=?",
+            (rid,
+             identity['id']))
     return jsonify({'message': 'Report deleted'})
 
 
@@ -491,30 +611,39 @@ def api_analyze(rid):
     image_path = report['image_path']
     if image_path:
         full_path = os.path.join('static', image_path)
-        result = analyze_fire_image(full_path if os.path.exists(full_path) else None)
+        result = analyze_fire_image(
+            full_path if os.path.exists(full_path) else None)
     else:
         result = analyze_fire_image(None)
 
-    severity     = result.get('severity')
+    severity = result.get('severity')
     water_liters = result.get('water_liters')
-    equipment    = result.get('equipment')
-    confidence   = result.get('confidence')
+    equipment = result.get('equipment')
+    confidence = result.get('confidence')
     fire_pixel_ratio = result.get('fire_pixel_ratio')
-    bounding_box = json.dumps(result.get('bounding_box')) if result.get('bounding_box') else None
+    bounding_box = json.dumps(result.get('bounding_box')) if result.get(
+        'bounding_box') else None
 
     with get_db() as conn:
         conn.execute(
             """UPDATE reports SET severity=?, water_liters=?, equipment=?, analysis_done=1,
                confidence=?, fire_pixel_ratio=?, bounding_box=?
                WHERE id=?""",
-            (severity, water_liters, json.dumps(equipment) if equipment else None, confidence, fire_pixel_ratio, bounding_box, rid)
-        )
+            (severity,
+             water_liters,
+             json.dumps(equipment) if equipment else None,
+             confidence,
+             fire_pixel_ratio,
+             bounding_box,
+             rid))
 
     return jsonify(result)
 
 # ─────────────────────────────────────────────
 #  SSE — Real-time alerts
 # ─────────────────────────────────────────────
+
+
 @app.route('/api/sse/<office_id>')
 def sse_stream(office_id):
     q = queue.Queue(maxsize=100)
@@ -532,7 +661,8 @@ def sse_stream(office_id):
                 except queue.Empty:
                     yield ": heartbeat\n\n"
         finally:
-            if office_id in sse_clients and q in sse_clients[office_id]:
+            if office_id in sse_clients and any(
+                    x is q for x in sse_clients[office_id]):
                 sse_clients[office_id].remove(q)
 
     return Response(
@@ -548,6 +678,8 @@ def sse_stream(office_id):
 # ─────────────────────────────────────────────
 #  PDF Export
 # ─────────────────────────────────────────────
+
+
 @app.route('/api/reports/export-pdf', methods=['GET'])
 @jwt_required()
 def api_export_pdf():
@@ -555,8 +687,9 @@ def api_export_pdf():
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import cm
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
-    from reportlab.lib.enums import TA_LEFT, TA_CENTER
+    from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
+                                    Paragraph, Spacer, HRFlowable)
+    from reportlab.lib.enums import TA_CENTER
 
     identity = json.loads(get_jwt_identity())
     office_id = identity['id']
@@ -571,22 +704,32 @@ def api_export_pdf():
 
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4,
-                             leftMargin=2*cm, rightMargin=2*cm,
-                             topMargin=2*cm, bottomMargin=2*cm)
+                            leftMargin=2 * cm, rightMargin=2 * cm,
+                            topMargin=2 * cm, bottomMargin=2 * cm)
     styles = getSampleStyleSheet()
     elements = []
 
-    title_style = ParagraphStyle('Title', fontSize=18, textColor=colors.HexColor('#FF4500'),
-                                  spaceAfter=6, alignment=TA_CENTER, fontName='Helvetica-Bold')
+    title_style = ParagraphStyle('Title', fontSize=18, textColor=colors.HexColor(
+        '#FF4500'), spaceAfter=6, alignment=TA_CENTER, fontName='Helvetica-Bold')
     sub_style = ParagraphStyle('Sub', fontSize=11, textColor=colors.grey,
-                                spaceAfter=12, alignment=TA_CENTER)
-    label_style = ParagraphStyle('Label', fontSize=10, textColor=colors.HexColor('#333333'),
-                                  spaceAfter=4)
+                               spaceAfter=12, alignment=TA_CENTER)
+    label_style = ParagraphStyle(
+        'Label',
+        fontSize=10,
+        textColor=colors.HexColor('#333333'),
+        spaceAfter=4)
 
     elements.append(Paragraph("🔥 FireSense — Incident Report", title_style))
-    elements.append(Paragraph(f"Office: {office_name} | Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", sub_style))
-    elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#FF4500')))
-    elements.append(Spacer(1, 0.4*cm))
+    elements.append(
+        Paragraph(
+            f"Office: {office_name} | Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}",
+            sub_style))
+    elements.append(
+        HRFlowable(
+            width="100%",
+            thickness=1,
+            color=colors.HexColor('#FF4500')))
+    elements.append(Spacer(1, 0.4 * cm))
 
     # Summary stats
     total = len(reports)
@@ -604,69 +747,97 @@ def api_export_pdf():
         ['Dispatched', str(dispatched), 'Medium Fires', str(medium)],
         ['Pending', str(pending), 'Small Fires', str(small)],
     ]
-    t = Table(summary_data, colWidths=[5*cm, 3*cm, 5*cm, 3*cm])
+    t = Table(summary_data, colWidths=[5 * cm, 3 * cm, 5 * cm, 3 * cm])
     t.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#FFF3F0')),
-        ('TEXTCOLOR', (0,0), (-1,-1), colors.HexColor('#333')),
-        ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold'),
-        ('FONTNAME', (2,0), (2,-1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0,0), (-1,-1), 9),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#DDDDDD')),
-        ('ROWBACKGROUNDS', (0,0), (-1,-1), [colors.white, colors.HexColor('#FFF9F8')]),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('PADDING', (0,0), (-1,-1), 6),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#FFF3F0')),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#333')),
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTNAME', (2, 0), (2, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#DDDDDD')),
+        ('ROWBACKGROUNDS', (0, 0), (-1, -1), [colors.white, colors.HexColor('#FFF9F8')]),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('PADDING', (0, 0), (-1, -1), 6),
     ]))
     elements.append(t)
-    elements.append(Spacer(1, 0.6*cm))
-    elements.append(HRFlowable(width="100%", thickness=0.5, color=colors.lightgrey))
-    elements.append(Spacer(1, 0.4*cm))
+    elements.append(Spacer(1, 0.6 * cm))
+    elements.append(
+        HRFlowable(
+            width="100%",
+            thickness=0.5,
+            color=colors.lightgrey))
+    elements.append(Spacer(1, 0.4 * cm))
 
     # Individual reports
-    elements.append(Paragraph("Individual Incident Records", ParagraphStyle('H2', fontSize=12,
-        fontName='Helvetica-Bold', textColor=colors.HexColor('#222'), spaceAfter=8)))
+    elements.append(
+        Paragraph(
+            "Individual Incident Records",
+            ParagraphStyle(
+                'H2',
+                fontSize=12,
+                fontName='Helvetica-Bold',
+                textColor=colors.HexColor('#222'),
+                spaceAfter=8)))
 
     for i, r in enumerate(reports, 1):
         submitted = r['submitted_at'][:16].replace('T', ' ')
-        row_data = [
-            ['#', str(i), 'Date/Time', submitted],
-            ['Location', f"{r['citizen_lat']:.4f}, {r['citizen_lng']:.4f}", 'Status', r['status']],
-            ['Severity', r['severity'] or '—', 'Water Est.', f"{r['water_liters']:,.0f} L" if r['water_liters'] else '—'],
-            ['Equipment', (r['equipment'] or '—')[:50], '', ''],
-        ]
-        rt = Table(row_data, colWidths=[2.5*cm, 6*cm, 2.5*cm, 5.5*cm])
+        row_data = [['#',
+                     str(i),
+                     'Date/Time',
+                     submitted],
+                    ['Location',
+                     f"{r['citizen_lat']:.4f}, {r['citizen_lng']:.4f}",
+                     'Status',
+                     r['status']],
+                    ['Severity',
+                     r['severity'] or '—',
+                     'Water Est.',
+                     f"{r['water_liters']:,.0f} L" if r['water_liters'] else '—'],
+                    ['Equipment',
+                     (r['equipment'] or '—')[:50],
+                     '',
+                     ''],
+                    ]
+        rt = Table(row_data, colWidths=[2.5 * cm, 6 * cm, 2.5 * cm, 5.5 * cm])
         rt.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#FF4500')),
-            ('TEXTCOLOR', (0,0), (0,0), colors.white),
-            ('TEXTCOLOR', (2,0), (2,0), colors.white),
-            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-            ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
-            ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold'),
-            ('FONTNAME', (2,0), (2,-1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0,0), (-1,-1), 8),
-            ('GRID', (0,0), (-1,-1), 0.4, colors.HexColor('#E0E0E0')),
-            ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#FAFAFA')]),
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-            ('PADDING', (0,0), (-1,-1), 5),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#FF4500')),
+            ('TEXTCOLOR', (0, 0), (0, 0), colors.white),
+            ('TEXTCOLOR', (2, 0), (2, 0), colors.white),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (2, 0), (2, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#E0E0E0')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FAFAFA')]),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('PADDING', (0, 0), (-1, -1), 5),
         ]))
         elements.append(rt)
-        elements.append(Spacer(1, 0.3*cm))
+        elements.append(Spacer(1, 0.3 * cm))
 
     doc.build(elements)
     buf.seek(0)
-    return send_file(buf, as_attachment=True,
-                     download_name=f'FireSense_Report_{datetime.utcnow().strftime("%Y%m%d_%H%M")}.pdf',
-                     mimetype='application/pdf')
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name=f'FireSense_Report_{
+            datetime.utcnow().strftime("%Y%m%d_%H%M")}.pdf',
+        mimetype='application/pdf')
 
 # ─────────────────────────────────────────────
 #  Dashboard stats for office
 # ─────────────────────────────────────────────
+
+
 @app.route('/api/reports/stats', methods=['GET'])
 @jwt_required()
 def api_stats():
     identity = json.loads(get_jwt_identity())
     office_id = identity['id']
     with get_db() as conn:
-        rows = conn.execute("SELECT * FROM reports WHERE office_id=?", (office_id,)).fetchall()
+        rows = conn.execute(
+            "SELECT * FROM reports WHERE office_id=?", (office_id,)).fetchall()
     reports = [dict(r) for r in rows]
     return jsonify({
         'total': len(reports),
@@ -677,6 +848,7 @@ def api_stats():
         'medium': sum(1 for r in reports if r['severity'] == 'Medium'),
         'small': sum(1 for r in reports if r['severity'] == 'Small'),
     })
+
 
 # ─────────────────────────────────────────────
 #  Start
