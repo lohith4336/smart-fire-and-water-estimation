@@ -214,7 +214,8 @@ function renderReportDetail(report) {
   // Init mini map for this report
   setTimeout(() => {
     const mapId = `report-map-${report.id}`;
-    if (document.getElementById(mapId)._leaflet_id) return;
+    const mapEl = document.getElementById(mapId);
+    if (!mapEl || mapEl._leaflet_id) return;
     const m = L.map(mapId, { zoomControl: true }).setView([report.citizen_lat, report.citizen_lng], 13);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' }).addTo(m);
     L.marker([report.citizen_lat, report.citizen_lng], {
@@ -451,7 +452,7 @@ function handleNewAlert(data) {
   // Show banner
   const banner = document.getElementById('new-alert-banner');
   document.getElementById('new-alert-text').textContent =
-    `🚨 New emergency report from ${data.address_hint || `${data.citizen_lat.toFixed(3)}, ${data.citizen_lng.toFixed(3)}`}!`;
+    `🚨 New emergency report from ${data.address_hint || `${data.citizen_lat?.toFixed(3) ?? '?'}, ${data.citizen_lng?.toFixed(3) ?? '?'}`}!`;
   banner.classList.remove('hidden');
 
   showToast('🚨 New fire report received!', 'error');

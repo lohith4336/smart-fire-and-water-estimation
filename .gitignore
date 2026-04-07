@@ -13,6 +13,7 @@ env/
 .flask_session/
 # Uploads and temporary files
 uploads/
+static/uploads/
 temp_*
 *.log
 # IDEs

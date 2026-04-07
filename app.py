@@ -5,7 +5,7 @@ import math
 import queue
 import sqlite3
 import bcrypt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from flask import (Flask, request, jsonify, send_from_directory,
                    Response, stream_with_context, send_file)
@@ -357,7 +357,6 @@ def delete_my_office():
 @limiter.limit("50 per hour")
 def api_submit_report():
     try:
-        import traceback
         citizen_lat = request.form.get('lat')
         citizen_lng = request.form.get('lng')
         address_hint = request.form.get('address', '')
@@ -497,7 +496,6 @@ def api_submit_report():
 @app.route('/api/analyze', methods=['POST'])
 def api_citizen_analyze():
     """Run fire analysis without saving to the DB."""
-    import uuid
     media = request.files.get('media')
     if media and media.filename:
         ext = media.filename.rsplit(
@@ -818,11 +816,11 @@ def api_export_pdf():
 
     doc.build(elements)
     buf.seek(0)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
     return send_file(
         buf,
         as_attachment=True,
-        download_name=f'FireSense_Report_{
-            datetime.utcnow().strftime("%Y%m%d_%H%M")}.pdf',
+        download_name=f'FireSense_Report_{ts}.pdf',
         mimetype='application/pdf')
 
 # ─────────────────────────────────────────────
