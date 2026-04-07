@@ -4,14 +4,21 @@
           registration reliability, dashboard caller info
 ═══════════════════════════════════════════════════════ */
 
-const API = (window.location.protocol === 'file:') ? 'http://localhost:5000' : '';
+// Determine API base URL correctly even if running via Live Server (port 5500)
+const IS_LOCAL = ['localhost','127.0.0.1'].includes(window.location.hostname) || window.location.protocol === 'file:';
+const localName = window.location.hostname || '127.0.0.1';
+const API = IS_LOCAL ? `http://${localName}:5000` : '';
 
-// ─── Server Wake-Up (Render free tier sleeps after inactivity) ───────────────
-let serverReady = false;
+// ─── Server Wake-Up (only on cloud — skipped on localhost) ───────────────────
+let serverReady = IS_LOCAL; // treat localhost as always-ready
 
 async function pingServer() {
+  if (IS_LOCAL) return true;
   try {
-    const res = await fetchWithRetry(API + '/api/health', { signal: AbortSignal.timeout(8000) });
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(API + '/api/health', { signal: controller.signal });
+    clearTimeout(tid);
     if (res.ok) {
       serverReady = true;
       const banner = document.getElementById('server-wake-banner');
@@ -26,23 +33,25 @@ async function ensureServerReady() {
   if (serverReady) return true;
   const ok = await pingServer();
   if (ok) return true;
-  // Show wake-up banner
-  let banner = document.getElementById('server-wake-banner');
-  if (!banner) {
-    banner = document.createElement('div');
-    banner.id = 'server-wake-banner';
-    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#FF4500;color:white;text-align:center;padding:10px 16px;font-size:14px;font-family:Inter,sans-serif;font-weight:600;';
-    banner.innerHTML = '⏳ Server is waking up (Render free tier). Please wait 30 seconds and try again…';
-    document.body.prepend(banner);
+  // Only show the banner on cloud (not localhost)
+  if (!IS_LOCAL) {
+    let banner = document.getElementById('server-wake-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'server-wake-banner';
+      banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#FF4500;color:white;text-align:center;padding:10px 16px;font-size:14px;font-family:Inter,sans-serif;font-weight:600;';
+      banner.innerHTML = '⏳ Server is waking up (Render free tier). Please wait 30 seconds and try again…';
+      document.body.prepend(banner);
+    }
+    banner.style.display = 'block';
+    return new Promise(resolve => {
+      const iv = setInterval(async () => {
+        const ready = await pingServer();
+        if (ready) { clearInterval(iv); resolve(true); }
+      }, 5000);
+    });
   }
-  banner.style.display = 'block';
-  // Retry every 5 seconds silently
-  return new Promise(resolve => {
-    const iv = setInterval(async () => {
-      const ready = await pingServer();
-      if (ready) { clearInterval(iv); resolve(true); }
-    }, 5000);
-  });
+  return true;
 }
 
 // ─── Fetch with Auto-Retry ────────────────────────────────────────────────────
@@ -58,9 +67,8 @@ async function fetchWithRetry(url, opts = {}, retries = 2) {
   }
 }
 
-// Wake the server immediately on page load
-pingServer();
-
+// Ping only on cloud, not localhost
+if (!IS_LOCAL) pingServer();
 
 // ─── Page Router ─────────────────────────────────────
 let regMap = null, regMarker = null;
@@ -70,6 +78,11 @@ let dashMap = null, reportMarkers = [];
 function showPage(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.getElementById('page-' + name).classList.add('active');
+
+  // Cleanup maps when leaving pages
+  if (name !== 'citizen') destroyCitizenMap();
+  if (name !== 'register') destroyRegMap();
+  if (name !== 'dashboard') destroyDashMap();
 
   if (name === 'citizen') { 
     initCitizenMap(); 
@@ -286,18 +299,23 @@ async function useMedia() {
     // UI behavior for small fires based on user request
     const rBtn = document.getElementById('btn-report');
     const actRow = document.getElementById('pre-actions-row');
+    const reporterForm = document.getElementById('reporter-form-section');
+    const smallFireMsg = document.getElementById('small-fire-msg');
+    
     if (data.severity === 'Tiny' || data.severity === 'Small') {
       if (actRow) actRow.style.display = 'block';
-      if (rBtn) {
-        rBtn.textContent = '🚨 UNCONTROLLABLE? REPORT ANYWAY';
-        rBtn.style.background = 'var(--fire-red)';
-      }
+      if (rBtn) rBtn.style.display = 'none'; // Hide submit button entirely
+      if (reporterForm) reporterForm.style.display = 'none'; // Hide reporter form
+      if (smallFireMsg) smallFireMsg.style.display = 'block'; // Show educational message
     } else {
       if (actRow) actRow.style.display = 'none';
       if (rBtn) {
+        rBtn.style.display = 'flex';
         rBtn.textContent = '🔥 REPORT FIRE NOW';
         rBtn.style.background = '';
       }
+      if (reporterForm) reporterForm.style.display = 'block';
+      if (smallFireMsg) smallFireMsg.style.display = 'none';
     }
 
     const colors = { Tiny: '#3B82F6', Small: 'var(--success)', Medium: 'var(--warning)', Large: 'var(--danger)' };
@@ -378,39 +396,96 @@ function detectLocation() {
   }, () => { st.textContent = '⚠ Allow GPS permission'; });
 }
 
+// ─── Map Cleanup Functions ────────────────────────────
+function destroyCitizenMap() {
+  if (citizenMap) {
+    try {
+      citizenMap.off();
+      if (userMarker) citizenMap.removeLayer(userMarker);
+      if (officeMarkers && officeMarkers.length > 0) {
+        officeMarkers.forEach(m => citizenMap.removeLayer(m));
+        officeMarkers = [];
+      }
+      citizenMap.remove();
+    } catch(e) {}
+    citizenMap = null;
+    userMarker = null;
+    officesLoaded = false;
+  }
+}
+
+function destroyRegMap() {
+  if (regMap) {
+    try {
+      regMap.off();
+      if (regMarker) regMap.removeLayer(regMarker);
+      regMap.remove();
+    } catch(e) {}
+    regMap = null;
+    regMarker = null;
+  }
+}
+
+function destroyDashMap() {
+  if (dashMap) {
+    try {
+      dashMap.off();
+      if (reportMarkers && reportMarkers.length > 0) {
+        reportMarkers.forEach(m => dashMap.removeLayer(m));
+        reportMarkers = [];
+      }
+      dashMap.remove();
+    } catch(e) {}
+    dashMap = null;
+  }
+}
+
 let officeMarkers = [], officesLoaded = false;
 function initCitizenMap() {
-  if (citizenMap) { citizenMap.invalidateSize(); if (!officesLoaded) loadOfficesOnMap(); return; }
-  citizenMap = L.map('citizen-map', { center:[20.5937,78.9629], zoom:5, minZoom:4, maxZoom:16, zoomControl:true });
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'© OpenStreetMap', maxZoom:19 }).addTo(citizenMap);
-  citizenMap.setMaxBounds(L.latLngBounds([6.0,68.0],[37.5,97.5]).pad(0.2));
+  const el = document.getElementById('citizen-map');
+  if (!el) return;
   
-  citizenMap.on('click', e => {
-    userLat = e.latlng.lat; userLng = e.latlng.lng;
-    const st = document.getElementById('loc-status');
-    const co = document.getElementById('loc-coords');
-    st.textContent = '📍 Custom location';
-    co.textContent = `${userLat.toFixed(5)}° N, ${userLng.toFixed(5)}° E`;
-    if (userMarker) {
-      userMarker.setLatLng([userLat, userLng]);
-    } else {
-      userMarker = L.marker([userLat, userLng], {
-        icon: L.divIcon({ html: '<div style="font-size:26px;line-height:1">🔴</div>', className:'', iconAnchor:[13,13] }),
-        draggable: true
-      }).addTo(citizenMap).bindPopup('<strong style="color:#FF4500">📍 Your Location</strong><br/><small style="color:gray">Drag pin to adjust</small>').openPopup();
-      userMarker.on('dragend', function (ev) {
-        const p = userMarker.getLatLng();
-        userLat = p.lat; userLng = p.lng;
-        co.textContent = `${userLat.toFixed(5)}° N, ${userLng.toFixed(5)}° E`;
-        st.textContent = '📍 Custom location';
-        fetchNearest();
-      });
-    }
-    fetchNearest();
-  });
+  if (citizenMap) { 
+    citizenMap.invalidateSize(); 
+    if (!officesLoaded) loadOfficesOnMap(); 
+    return; 
+  }
+  
+  try {
+    citizenMap = L.map('citizen-map', { center:[20.5937,78.9629], zoom:5, minZoom:4, maxZoom:16, zoomControl:true });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'© OpenStreetMap', maxZoom:19 }).addTo(citizenMap);
+    citizenMap.setMaxBounds(L.latLngBounds([6.0,68.0],[37.5,97.5]).pad(0.2));
+    
+    citizenMap.on('click', e => {
+      userLat = e.latlng.lat; userLng = e.latlng.lng;
+      const st = document.getElementById('loc-status');
+      const co = document.getElementById('loc-coords');
+      st.textContent = '📍 Custom location';
+      co.textContent = `${userLat.toFixed(5)}° N, ${userLng.toFixed(5)}° E`;
+      if (userMarker) {
+        userMarker.setLatLng([userLat, userLng]);
+      } else {
+        userMarker = L.marker([userLat, userLng], {
+          icon: L.divIcon({ html: '<div style="font-size:26px;line-height:1">🔴</div>', className:'', iconAnchor:[13,13] }),
+          draggable: true
+        }).addTo(citizenMap).bindPopup('<strong style="color:#FF4500">📍 Your Location</strong><br/><small style="color:gray">Drag pin to adjust</small>').openPopup();
+        userMarker.on('dragend', function (ev) {
+          const p = userMarker.getLatLng();
+          userLat = p.lat; userLng = p.lng;
+          co.textContent = `${userLat.toFixed(5)}° N, ${userLng.toFixed(5)}° E`;
+          st.textContent = '📍 Custom location';
+          fetchNearest();
+        });
+      }
+      fetchNearest();
+    });
 
-  loadOfficesOnMap();
-  detectLocation();
+    loadOfficesOnMap();
+    detectLocation();
+  } catch(e) {
+    console.error('Map init error:', e);
+    destroyCitizenMap();
+  }
 }
 
 async function loadOfficesOnMap() {
@@ -482,11 +557,20 @@ async function submitReport() {
   if (window.lastAnalysisData) fd.append('analysis_data', window.lastAnalysisData);
 
   try {
-    const res = await fetchWithRetry(API + '/api/reports', { method:'POST', body: fd });
+    // Use plain fetch (no retry) — report is a one-shot action, not a network ping
+    let res;
+    try {
+      res = await fetch(API + '/api/reports', { method: 'POST', body: fd });
+    } catch (netErr) {
+      throw new Error(`Cannot reach python server at ${API || window.location.origin}. Make sure you have opened a terminal and run 'python app.py' so the backend is online!`);
+    }
+
     const text = await res.text();
     let data = {};
-    try { data = JSON.parse(text); } catch(e) { throw new Error(text ? `Server Error: ${text.substring(0, 100)}` : "Empty response from server"); }
-    if (!res.ok) throw new Error(data.error || 'Failed to send report');
+    try { data = JSON.parse(text); } catch(e) {
+      throw new Error(text ? `Server error ${res.status}: ${text.substring(0, 120)}` : `Server returned empty response (Status: ${res.status} ${res.statusText}).`);
+    }
+    if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
 
     // Show success screen
     document.getElementById('suc-station').textContent = `Alerted: ${data.office_name}`;
@@ -525,8 +609,13 @@ function reportAnother() {
   document.getElementById('success-screen').classList.remove('show');
   document.getElementById('suc-dist').style.display = 'block';
   document.getElementById('btn-report').disabled = false;
+  document.getElementById('btn-report').style.display = 'flex';
   document.getElementById('btn-report').textContent = '🔥 REPORT FIRE NOW';
   document.getElementById('btn-report').style.background = '';
+  const reporterForm = document.getElementById('reporter-form-section');
+  if (reporterForm) reporterForm.style.display = 'block';
+  const smallFireMsg = document.getElementById('small-fire-msg');
+  if (smallFireMsg) smallFireMsg.style.display = 'none';
   document.getElementById('r-name').value = '';
   document.getElementById('r-phone').value = '';
   document.getElementById('addr-hint').value = '';
@@ -594,31 +683,39 @@ function initRegMap() {
   if (regMap) { regMap.invalidateSize(); return; }
   const el = document.getElementById('reg-map');
   if (!el) return;
-  regMap = L.map('reg-map', { center:[20.5937,78.9629], zoom:5, minZoom:4, maxZoom:16 });
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'© OSM', maxZoom:19 }).addTo(regMap);
-  regMap.setMaxBounds(L.latLngBounds([6.0,68.0],[37.5,97.5]).pad(0.2));
-  regMap.on('click', e => {
-    const {lat, lng} = e.latlng;
-    document.getElementById('reg-lat').value = lat.toFixed(6);
-    document.getElementById('reg-lng').value = lng.toFixed(6);
-    if (regMarker) regMap.removeLayer(regMarker);
-    regMarker = L.marker([lat,lng], {
-      icon: L.divIcon({ html:'<div style="font-size:26px">🚒</div>', className:'', iconAnchor:[13,13] })
-    }).addTo(regMap).bindPopup('<strong>Station Location Set</strong>').openPopup();
-  });
+  
+  try {
+    regMap = L.map('reg-map', { center:[20.5937,78.9629], zoom:5, minZoom:4, maxZoom:16 });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'© OSM', maxZoom:19 }).addTo(regMap);
+    regMap.setMaxBounds(L.latLngBounds([6.0,68.0],[37.5,97.5]).pad(0.2));
+    regMap.on('click', e => {
+      const {lat, lng} = e.latlng;
+      document.getElementById('reg-lat').value = lat.toFixed(6);
+      document.getElementById('reg-lng').value = lng.toFixed(6);
+      if (regMarker) regMap.removeLayer(regMarker);
+      regMarker = L.marker([lat,lng], {
+        icon: L.divIcon({ html:'<div style="font-size:26px">🚒</div>', className:'', iconAnchor:[13,13] })
+      }).addTo(regMap).bindPopup('<strong>Station Location Set</strong>').openPopup();
+    });
 
-  // Auto-detect location on initialization
-  detectRegLocation();
+    // Auto-detect location on initialization
+    detectRegLocation();
+  } catch(e) {
+    console.error('RegMap init error:', e);
+    destroyRegMap();
+  }
 }
 
 function detectRegLocation() {
   const btn = document.getElementById('btn-reg-loc');
+  if (!btn) return;
   btn.textContent = '⏳ Detecting...'; btn.disabled = true;
   if (!navigator.geolocation) {
     showToast('Geolocation not supported', 'error');
     btn.textContent = '📍 Detect Location'; btn.disabled = false; return;
   }
   navigator.geolocation.getCurrentPosition(pos => {
+    if (!regMap) return; // Map was destroyed, abort
     const lat = pos.coords.latitude, lng = pos.coords.longitude;
     document.getElementById('reg-lat').value = lat.toFixed(6);
     document.getElementById('reg-lng').value = lng.toFixed(6);
@@ -631,7 +728,7 @@ function detectRegLocation() {
     showToast('Location detected via GPS!', 'success');
   }, () => {
     showToast('Please allow GPS permission in browser', 'error');
-    btn.textContent = '📍 Detect Location'; btn.disabled = false;
+    if (btn) { btn.textContent = '📍 Detect Location'; btn.disabled = false; }
   });
 }
 
@@ -714,6 +811,24 @@ async function handleRegister(e) {
     document.getElementById('reg-form').reset();
     if (regMarker) { regMap.removeLayer(regMarker); regMarker = null; }
     showToast('Station registered! You can now login.', 'success');
+
+    // Browser Push Notification for Registration
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('✅ Registration Successful!', {
+        body: `Your Fire Station account has been registered. Please log in to view the dashboard and receive alerts.`,
+        icon: '/static/icons/icon-192.png',
+      });
+    } else if ('Notification' in window && Notification.permission !== 'denied') {
+      Notification.requestPermission().then(perm => {
+        if (perm === 'granted') {
+          new Notification('✅ Registration Successful!', {
+            body: `Your Fire Station account has been registered. Please log in to view the dashboard and receive alerts.`,
+            icon: '/static/icons/icon-192.png',
+          });
+        }
+      });
+    }
+
     // Auto-redirect to login after 2s
     setTimeout(() => showPage('login'), 2200);
   } catch(ex) {
@@ -1036,10 +1151,30 @@ async function deleteReport(rid) {
 
 // ── Dashboard Map ─────────────────────────────────────
 function initDashMap() {
-  if (dashMap) return;
+  const mapEl = document.getElementById('dashboard-map');
+  if (!mapEl) return;
+  if (mapEl._leaflet_id && dashMap) return; // Already initialized and matches variable
+  
+  if (dashMap) {
+    try { dashMap.remove(); } catch(e) {}
+    dashMap = null;
+  }
+  
+  // If element has a leaflet ID but our variable is null, it means the map exists but wasn't tracked
+  if (mapEl._leaflet_id) {
+    // We can't easily re-bind, so we clear the container
+    mapEl.innerHTML = "";
+    const newDiv = document.createElement('div');
+    newDiv.id = 'dashboard-map';
+    newDiv.style.width = '100%';
+    newDiv.style.height = '100%';
+    mapEl.parentNode.replaceChild(newDiv, mapEl);
+  }
+
   dashMap = L.map('dashboard-map',{center:[20.5937,78.9629],zoom:5,minZoom:4,maxZoom:16});
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OSM',maxZoom:19}).addTo(dashMap);
   dashMap.setMaxBounds(L.latLngBounds([6.0,68.0],[37.5,97.5]).pad(0.2));
+  
   fetch(API+'/api/offices').then(r=>r.json()).then(offices=>{
     const myId=localStorage.getItem('fs_office_id');
     offices.forEach(o=>{
@@ -1087,15 +1222,33 @@ function updateMapMarkers() {
 // ── SSE ───────────────────────────────────────────────
 function connectSSE() {
   const oid=localStorage.getItem('fs_office_id'); if(!oid) return;
-  if(sseSource) sseSource.close();
+  if(sseSource) {
+    console.log('Reconnecting SSE...');
+    sseSource.close();
+  } else {
+    console.log('Connecting to real-time alert stream...');
+  }
+  
   sseSource=new EventSource(`${API}/api/sse/${oid}`);
+  
+  sseSource.onopen = () => {
+    console.log('✅ Real-time alert stream connected');
+    showToast('📡 Connected to live alerts', 'success');
+    loadReports(); // Fetch latest reports on connection
+  };
+  
   sseSource.onmessage=e=>{
     try{
       const d=JSON.parse(e.data);
       if(d.type==='new_report') handleNewAlert(d);
     }catch(_){}
   };
-  sseSource.onerror=()=>setTimeout(connectSSE,5000);
+  
+  sseSource.onerror=(err)=>{
+    console.error('SSE Error:', err);
+    sseSource.close();
+    setTimeout(connectSSE, 5000);
+  };
 }
 function handleNewAlert(data) {
   newAlertCount++;
@@ -1139,13 +1292,52 @@ async function exportPDF() {
   } catch(e){ showToast('PDF export failed','error'); }
 }
 
+// ── Account Management ────────────────────────────────
+async function deleteAccount() {
+  const confirmMsg = "⚠️ CRITICAL: Are you sure you want to PERMANENTLY delete your fire station account?\n\nThis will remove your station from the map and delete ALL incident reports sent to you. This action CANNOT be undone.";
+  if (!confirm(confirmMsg)) return;
+  
+  const finalConfirm = prompt("To confirm deletion, please type your station name exactly as it appears (see top right):");
+  const myName = localStorage.getItem('fs_office_name');
+  
+  if (finalConfirm !== myName) {
+    showToast("Deletion cancelled: Station name did not match.", "info");
+    return;
+  }
+  
+  showToast("Deleting account...", "info");
+  try {
+    const res = await fetch(`${API}/api/offices/me`, {
+      method: 'DELETE',
+      headers: authHeaders()
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to delete account');
+    
+    showToast("Account deleted successfully.", "success");
+    // Small delay to let the toast be seen
+    setTimeout(() => logout(), 1500);
+  } catch(ex) {
+    showToast("Error: " + ex.message, "error");
+  }
+}
+
 // ── Logout ────────────────────────────────────────────
 function logout() {
   if(sseSource) sseSource.close();
   localStorage.removeItem('fs_token');
   localStorage.removeItem('fs_office_id');
   localStorage.removeItem('fs_office_name');
-  dashInited=false; dashMap=null; reportMarkers=[];
+  localStorage.removeItem('fs_office_lat');
+  localStorage.removeItem('fs_office_lng');
+  
+  dashInited=false; 
+  if (dashMap) {
+    try { dashMap.remove(); } catch(e) {}
+    dashMap = null;
+  }
+  reportMarkers=[];
+  
   showPage('citizen');
   showToast('Logged out successfully','info');
 }
