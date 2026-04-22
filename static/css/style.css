@@ -148,6 +148,7 @@ body {
 .badge-dispatched { background: rgba(59,130,246,0.15); color: var(--info); }
 .badge-resolved { background: rgba(34,197,94,0.15);  color: var(--success); }
 .badge-small  { background: rgba(34,197,94,0.15);  color: var(--success); }
+.badge-tiny   { background: rgba(59,130,246,0.15);  color: var(--info); }
 .badge-medium { background: rgba(245,158,11,0.15); color: var(--warning); }
 .badge-large  { background: rgba(239,68,68,0.15);  color: var(--danger); }
 
@@ -529,6 +530,7 @@ body {
 .analysis-label { font-size: 11px; text-transform: uppercase; color: var(--text-muted);
   font-weight: 600; letter-spacing: 0.5px; margin-bottom: 4px; }
 .analysis-val { font-size: 18px; font-weight: 700; }
+.analysis-val.fire-color-tiny   { color: var(--info); }
 .analysis-val.fire-color-small  { color: var(--success); }
 .analysis-val.fire-color-medium { color: var(--warning); }
 .analysis-val.fire-color-large  { color: var(--danger); }

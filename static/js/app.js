@@ -74,6 +74,7 @@ if (!IS_LOCAL) pingServer();
 let regMap = null, regMarker = null;
 let citizenMap = null, userMarker = null;
 let dashMap = null, reportMarkers = [];
+let nearestPolylines = [], nearestDistMarkers = []; // track distance overlays to clear on refresh
 
 function showPage(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -131,6 +132,8 @@ let isCameraStarting = false;
 let cameraWantsToStop = false;
 let mediaRecorder = null, recordedChunks = [];
 let isRecording = false;
+let recTimerInterval = null;   // ← live recording timer
+let recStartTime = 0;
 let userLat = null, userLng = null;
 let nearestOffice = null, allOffices = [];
 let currentFacingMode = 'environment'; // back camera by default
@@ -178,8 +181,8 @@ async function startCitizenCamera() {
     document.getElementById('cam-prompt').style.display = 'none';
     document.getElementById('cam-controls').style.display = 'flex';
     // Hide camera-dependent buttons
-    document.getElementById('btn-capture').style.display = 'none';
-    document.getElementById('btn-record').style.display = 'none';
+    const btnCapture = document.getElementById('btn-capture');
+    if (btnCapture) btnCapture.style.display = 'none';
     hasCameraSupport = false;
   } finally {
     isCameraStarting = false;
@@ -207,6 +210,80 @@ function stopCitizenCamera() {
   if (controls) controls.style.display = 'none';
 }
 
+// ── Video Recording ───────────────────────────────────
+async function startVideoRecord() {
+  if (!cameraStream) {
+    showToast('Start camera first', 'error');
+    return;
+  }
+  if (isRecording) return;
+
+  recordedChunks = [];
+  const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+    ? 'video/webm;codecs=vp9'
+    : MediaRecorder.isTypeSupported('video/webm') ? 'video/webm' : 'video/mp4';
+
+  try {
+    mediaRecorder = new MediaRecorder(cameraStream, { mimeType });
+  } catch(e) {
+    showToast('Recording not supported on this browser', 'error');
+    return;
+  }
+
+  mediaRecorder.ondataavailable = e => {
+    if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+  };
+
+  mediaRecorder.onstop = () => {
+    const ext  = mimeType.includes('webm') ? 'webm' : 'mp4';
+    const blob = new Blob(recordedChunks, { type: mimeType });
+    selectedVideo = new File([blob], `fire-recording.${ext}`, { type: mimeType });
+    selectedFile  = null;
+
+    // Show in the snap overlay for preview/confirm
+    const vid = document.getElementById('snap-vid');
+    const img = document.getElementById('snap-img');
+    vid.src = URL.createObjectURL(blob);
+    vid.style.display = 'block';
+    img.style.display = 'none'; img.src = '';
+    document.getElementById('snap-overlay').style.display = 'block';
+    showToast('Recording saved — tap ✓ Use This to analyse it', 'success');
+  };
+
+  mediaRecorder.start(250);
+  isRecording = true;
+
+  // UI: swap buttons, show REC dot, start timer
+  document.getElementById('btn-rec-start').style.display = 'none';
+  document.getElementById('btn-rec-stop').style.display  = 'flex';
+  document.getElementById('rec-dot').classList.add('show');
+
+  recStartTime = Date.now();
+  recTimerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - recStartTime) / 1000);
+    const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+    const ss = String(elapsed % 60).padStart(2, '0');
+    const timerEl = document.getElementById('rec-timer');
+    if (timerEl) timerEl.textContent = `${mm}:${ss}`;
+  }, 1000);
+}
+
+function stopVideoRecord() {
+  if (!isRecording || !mediaRecorder) return;
+  clearInterval(recTimerInterval);
+  recTimerInterval = null;
+  isRecording = false;
+
+  try { mediaRecorder.stop(); } catch(e) {}
+
+  // UI: swap buttons back, hide REC dot
+  document.getElementById('btn-rec-start').style.display = 'flex';
+  document.getElementById('btn-rec-stop').style.display  = 'none';
+  document.getElementById('rec-dot').classList.remove('show');
+  const timerEl = document.getElementById('rec-timer');
+  if (timerEl) timerEl.textContent = '00:00';
+}
+
 // ── Capture a photo frame ──────────────────────────────
 function captureFrame() {
   const feed = document.getElementById('cam-feed');
@@ -231,7 +308,10 @@ function captureFrame() {
 
 // ── File upload ────────────────────────────────────────
 function triggerUpload() {
-  document.getElementById('file-input').click();
+  // Ensure the file input accepts both image and video
+  const fi = document.getElementById('file-input');
+  fi.accept = 'image/*,video/mp4,video/webm,video/quicktime,video/x-msvideo';
+  fi.click();
 }
 
 function handleFileSelect(input) {
@@ -273,40 +353,59 @@ async function useMedia() {
   stopCitizenCamera();
 
   const fd = new FormData();
-  if (selectedFile) fd.append('image', selectedFile);
+  // Send image or video using the correct field name so the backend detects type
+  if (selectedFile)  fd.append('image', selectedFile);
   if (selectedVideo) fd.append('video', selectedVideo);
 
   try {
     const res = await fetchWithRetry(API + '/api/analyze-media', { method: 'POST', body: fd });
     const text = await res.text();
     let data = {};
-    try { data = JSON.parse(text); } catch(e) { throw new Error(text ? `Server Error: ${text.substring(0, 100)}` : "Empty response from server"); }
+    try { data = JSON.parse(text); } catch(e) { throw new Error(text ? `Server Error: ${text.substring(0, 100)}` : 'Empty response from server'); }
     document.getElementById('analyzing-overlay').style.display = 'none';
 
     if (!res.ok) throw new Error(data.error || 'Analysis failed');
 
     if (!data.fire_detected) {
-      showToast('No fire detected in the image. You may still report manually below.', 'warning');
+      showToast('No fire detected. You may still report manually below.', 'warning');
       document.getElementById('pre-analysis-container').style.display = 'none';
       return;
     }
 
-    // Fire detected, show results
+    // Fire detected — show results
     window.lastAnalysisData = JSON.stringify(data);
-    
+
     document.getElementById('pre-sev-text').textContent = data.severity;
-    
-    // UI behavior for small fires based on user request
+
+    // ── Confidence meter ──────────────────────────────────
+    const confPct  = document.getElementById('pre-conf-pct');
+    const confBar  = document.getElementById('pre-conf-bar');
+    const conf = data.confidence || 0;
+    if (confPct) confPct.textContent = `${conf}%`;
+    if (confBar) {
+      // Animate in: start at 0, set to actual after a tick
+      confBar.style.width = '0%';
+      setTimeout(() => { confBar.style.width = `${conf}%`; }, 50);
+    }
+
+    // ── Media type badge (📷 Image / 🎥 Video) ───────────
+    const badge = document.getElementById('pre-media-badge');
+    if (badge) {
+      badge.textContent = data.media_type === 'video' ? '🎥 Video Analysis' : '📷 Image Analysis';
+      badge.style.display = 'inline-block';
+    }
+
+    // ── Small / Tiny fire UI ─────────────────────────────
     const rBtn = document.getElementById('btn-report');
     const actRow = document.getElementById('pre-actions-row');
     const reporterForm = document.getElementById('reporter-form-section');
     const smallFireMsg = document.getElementById('small-fire-msg');
-    
+
     if (data.severity === 'Tiny' || data.severity === 'Small') {
       if (actRow) actRow.style.display = 'block';
-      if (rBtn) rBtn.style.display = 'none'; // Hide submit button entirely
-      if (reporterForm) reporterForm.style.display = 'none'; // Hide reporter form
-      if (smallFireMsg) smallFireMsg.style.display = 'block'; // Show educational message
+      if (rBtn) rBtn.style.display = 'none';
+      if (reporterForm) reporterForm.style.display = 'none';
+      if (smallFireMsg) smallFireMsg.style.display = 'block';
     } else {
       if (actRow) actRow.style.display = 'none';
       if (rBtn) {
@@ -320,8 +419,9 @@ async function useMedia() {
 
     const colors = { Tiny: '#3B82F6', Small: 'var(--success)', Medium: 'var(--warning)', Large: 'var(--danger)' };
     document.getElementById('pre-sev-text').style.color = colors[data.severity] || 'var(--fire-orange)';
-    document.getElementById('pre-water-text').textContent = (data.water_liters).toLocaleString('en-IN') + ' L';
-    
+    document.getElementById('pre-water-text').textContent =
+      (data.water_liters ? (+data.water_liters).toLocaleString('en-IN') : '0') + ' L';
+
     const tipsList = document.getElementById('pre-tips-list');
     tipsList.innerHTML = '';
     if (data.safety_tips) {
@@ -333,7 +433,6 @@ async function useMedia() {
     }
 
     document.getElementById('pre-analysis-container').style.display = 'block';
-    
     updateMediaIndicator();
     document.getElementById('report-sheet').scrollTo({ top: 0, behavior: 'smooth' });
   } catch(err) {
@@ -402,6 +501,8 @@ function destroyCitizenMap() {
     try {
       citizenMap.off();
       if (userMarker) citizenMap.removeLayer(userMarker);
+      nearestPolylines.forEach(p => { try { citizenMap.removeLayer(p); } catch(_){} });
+      nearestDistMarkers.forEach(m => { try { citizenMap.removeLayer(m); } catch(_){} });
       if (officeMarkers && officeMarkers.length > 0) {
         officeMarkers.forEach(m => citizenMap.removeLayer(m));
         officeMarkers = [];
@@ -411,6 +512,8 @@ function destroyCitizenMap() {
     citizenMap = null;
     userMarker = null;
     officesLoaded = false;
+    nearestPolylines = [];
+    nearestDistMarkers = [];
   }
 }
 
@@ -512,19 +615,27 @@ async function fetchNearest() {
   try {
     const res = await fetchWithRetry(`${API}/api/offices/nearest?lat=${userLat}&lng=${userLng}`);
     nearestOffice = await res.json();
-    if (nearestOffice?.lat) {
+    if (nearestOffice?.lat && citizenMap) {
       const pill = document.getElementById('nearest-pill');
       const pillTxt = document.getElementById('nearest-pill-text');
       pill.classList.add('show');
       pillTxt.textContent = `${nearestOffice.name} — ${nearestOffice.distance_km} km away`;
 
-      L.polyline([[userLat,userLng],[nearestOffice.lat,nearestOffice.lng]],
+      // Clear previous distance overlays before drawing new ones
+      nearestPolylines.forEach(p => { try { citizenMap.removeLayer(p); } catch(_){} });
+      nearestDistMarkers.forEach(m => { try { citizenMap.removeLayer(m); } catch(_){} });
+      nearestPolylines = [];
+      nearestDistMarkers = [];
+
+      const pl = L.polyline([[userLat,userLng],[nearestOffice.lat,nearestOffice.lng]],
         { color:'#FF4500', weight:2, dashArray:'6,6', opacity:0.7 }).addTo(citizenMap);
+      nearestPolylines.push(pl);
       const mid = [(userLat+nearestOffice.lat)/2,(userLng+nearestOffice.lng)/2];
-      L.marker(mid, { icon: L.divIcon({
+      const dm = L.marker(mid, { icon: L.divIcon({
         html:`<div style="background:rgba(255,69,0,.85);color:white;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;white-space:nowrap">${nearestOffice.distance_km} km</div>`,
         className:'', iconAnchor:[35,10]
       })}).addTo(citizenMap);
+      nearestDistMarkers.push(dm);
     }
   } catch(e) {}
 }

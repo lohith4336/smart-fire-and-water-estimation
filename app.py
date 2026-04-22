@@ -14,7 +14,7 @@ from flask_jwt_extended import (JWTManager, create_access_token,
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from fire_analysis import analyze_fire_image
+from fire_analysis import analyze_fire_image, analyze_fire_video, is_video_path
 
 # ─────────────────────────────────────────────
 #  App Setup
@@ -210,45 +210,61 @@ def health_check():
 @app.route('/api/analyze-media', methods=['POST'])
 @limiter.limit("50 per hour")
 def api_analyze_media():
-    image_path = None
+    """Analyze an uploaded image OR video for fire detection."""
     file_id = str(uuid.uuid4())
-    
-    if 'image' not in request.files:
-        return jsonify({'error': 'No image provided'}), 400
-        
-    f = request.files['image']
-    if not f or f.filename == '':
-        return jsonify({'error': 'Image file is empty'}), 400
-    
+    saved_path = None
+
+    # Accept either 'image' or 'video' field name from the frontend
+    f = request.files.get('image') or request.files.get('video')
+    if not f or not f.filename:
+        return jsonify({'error': 'No media file provided'}), 400
+
     try:
-        fname = f"temp_{file_id}.jpg"
+        # Determine extension from filename or content-type
+        filename = f.filename or ''
+        mime_type = (f.content_type or '').lower()
+
+        # Detect video by MIME or extension
+        is_video = (
+            mime_type.startswith('video/') or
+            ('.' in filename and
+             filename.rsplit('.', 1)[1].lower() in
+             {'mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v'})
+        )
+
+        if is_video:
+            ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'webm'
+            fname = f"temp_{file_id}.{ext}"
+        else:
+            fname = f"temp_{file_id}.jpg"
+
         os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-        full_path = os.path.join(app.config['UPLOAD_FOLDER'], fname)
-        f.save(full_path)
-        
-        # Verify file was actually saved
-        if not os.path.exists(full_path):
-            return jsonify({'error': 'Failed to save image'}), 500
-            
-        image_path = full_path
-        
-        # Run analysis
-        result = analyze_fire_image(image_path)
-        
-        # Ensure result is never None
+        saved_path = os.path.join(app.config['UPLOAD_FOLDER'], fname)
+        f.save(saved_path)
+
+        if not os.path.exists(saved_path):
+            return jsonify({'error': 'Failed to save media file'}), 500
+
+        # Route to the correct analyser
+        if is_video:
+            result = analyze_fire_video(saved_path)
+        else:
+            result = analyze_fire_image(saved_path)
+
         if result is None:
             result = {'fire_detected': False, 'severity': 'None', 'confidence': 0}
-        
+
+        # Tag whether we analysed a video so the frontend can show it
+        result['media_type'] = 'video' if is_video else 'image'
         return jsonify(result)
-    
+
     except Exception as e:
         return jsonify({'error': f'Analysis failed: {str(e)}'}), 500
-    
+
     finally:
-        # Cleanup temp file
-        if image_path and os.path.exists(image_path):
+        if saved_path and os.path.exists(saved_path):
             try:
-                os.remove(image_path)
+                os.remove(saved_path)
             except Exception:
                 pass
 

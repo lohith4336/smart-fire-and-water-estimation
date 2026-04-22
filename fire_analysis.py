@@ -12,6 +12,14 @@ except ImportError:
     colorsys = None  # type: ignore
     PIL_AVAILABLE = False
 
+# ─── OpenCV (optional, for video frame extraction) ─────────────────────────────
+try:
+    import cv2  # type: ignore
+    CV2_AVAILABLE = True
+except ImportError:
+    cv2 = None  # type: ignore
+    CV2_AVAILABLE = False
+
 # ─── Cloud Environment Guard ─────────────────────────────────────────────────
 # Render.com sets the 'RENDER' env variable automatically.
 # We NEVER try to load heavy ML models there (512MB RAM limit).
@@ -30,25 +38,184 @@ if not IS_CLOUD:
     except Exception:
         pass
 
+# ─── Video file extensions ────────────────────────────────────────────────────
+VIDEO_EXTENSIONS = {'mp4', 'webm', 'mov', 'avi', 'mkv', 'flv', 'm4v'}
+IMAGE_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'}
+
+
+def _get_extension(path):
+    """Return lowercase extension without dot, or empty string."""
+    if not path:
+        return ''
+    return path.rsplit('.', 1)[-1].lower() if '.' in path else ''
+
+
+def is_video_path(path):
+    """Return True if the file looks like a video."""
+    return _get_extension(path) in VIDEO_EXTENSIONS
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PUBLIC API
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def analyze_fire_image(image_path):
     """
-    Main entry point. Always returns a complete dict — never crashes.
+    Main entry point for single images.
+    Always returns a complete dict — never crashes.
     """
     try:
         if not image_path:
             return _no_fire_result(confidence=0)
-            
+
         if not os.path.exists(image_path):
             return _no_fire_result(confidence=0)
-            
+
         if not PIL_AVAILABLE:
             return _no_fire_result(confidence=0)
-            
+
         return _analyze_cv(image_path)
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
         return _no_fire_result(confidence=0)
+
+
+def analyze_fire_video(video_path):
+    """
+    Analyze a video for fire by extracting frames and running CV on each.
+    Strategy:
+      - If OpenCV is available: sample up to 10 frames evenly across the video.
+      - If OpenCV not available: try to read the first byte of the file as a
+        JPEG (for short clips saved as a single frame by some browsers), then
+        fall back to no-fire result so the user is never crashed out.
+    Returns the WORST-CASE result (highest severity found across all frames).
+    Always returns a complete dict — never crashes.
+    """
+    try:
+        if not video_path or not os.path.exists(video_path):
+            return _no_fire_result(confidence=0)
+
+        if CV2_AVAILABLE:
+            return _analyze_video_cv2(video_path)
+        else:
+            # PIL fallback: try to open the file as an image (some browsers
+            # save single-frame "videos" that are actually JPEG blobs)
+            return _analyze_video_pil_fallback(video_path)
+
+    except Exception:
+        traceback.print_exc()
+        return _no_fire_result(confidence=0)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  VIDEO ANALYSIS — OpenCV path
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _analyze_video_cv2(video_path):
+    """Extract up to 10 evenly-spaced frames and return worst-case result."""
+    import tempfile
+
+    cap = cv2.VideoCapture(video_path)  # type: ignore
+    if not cap.isOpened():
+        return _no_fire_result(confidence=0)
+
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))  # type: ignore
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25  # type: ignore
+    if total_frames <= 0:
+        cap.release()
+        return _no_fire_result(confidence=0)
+
+    # Sample up to 10 frames
+    num_samples = min(10, max(1, total_frames))
+    step = max(1, total_frames // num_samples)
+    frame_indices = [i * step for i in range(num_samples)]
+
+    results = []
+    temp_files = []
+
+    try:
+        for idx in frame_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)  # type: ignore
+            ret, frame = cap.read()
+            if not ret:
+                continue
+
+            # Save frame to temp file and analyze with PIL engine
+            tmp = tempfile.NamedTemporaryFile(
+                suffix='.jpg', delete=False,
+                dir=os.path.dirname(video_path))
+            tmp_path = tmp.name
+            tmp.close()
+            temp_files.append(tmp_path)
+
+            cv2.imwrite(tmp_path, frame)  # type: ignore
+            result = analyze_fire_image(tmp_path)
+            results.append(result)
+
+    finally:
+        cap.release()
+        for f in temp_files:
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+
+    if not results:
+        return _no_fire_result(confidence=0)
+
+    # Return worst-case (highest severity)
+    return _pick_worst_result(results)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  VIDEO ANALYSIS — PIL-only fallback (no OpenCV)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _analyze_video_pil_fallback(video_path):
+    """
+    Without OpenCV we can't decode video frames. Try to open the binary file
+    as an image (works for some webm/mp4 that browsers create as raw JPEG).
+    If that fails, return a warning result prompting the user to install cv2.
+    """
+    if not PIL_AVAILABLE:
+        return _no_fire_result(confidence=0)
+
+    try:
+        # Some browser-recorded webm start with JPEG data — worth trying
+        img = Image.open(video_path)  # type: ignore
+        img.verify()
+        return _analyze_cv(video_path)
+    except Exception:
+        pass
+
+    # Cannot decode video — return informational no-fire with a note
+    result = _no_fire_result(confidence=0)
+    result['video_note'] = (
+        'Video frame extraction requires opencv-python-headless. '
+        'Install it with: pip install opencv-python-headless'
+    )
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_SEVERITY_RANK = {'None': 0, 'Tiny': 1, 'Small': 2, 'Medium': 3, 'Large': 4}
+
+
+def _pick_worst_result(results):
+    """Return the result with the highest severity; fire_detected results win."""
+    fire_results = [r for r in results if r.get('fire_detected')]
+    if not fire_results:
+        # No frame had fire — return highest-confidence no-fire
+        return max(results, key=lambda r: r.get('confidence', 0))
+
+    # Pick highest severity
+    return max(
+        fire_results,
+        key=lambda r: _SEVERITY_RANK.get(r.get('severity', 'None'), 0)
+    )
 
 
 # ─── Core CV Engine ─────────────────────────────────────────────────────

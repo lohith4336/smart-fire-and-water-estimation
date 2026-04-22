@@ -398,10 +398,16 @@
       <button class="cam-action-btn" id="btn-capture" onclick="captureFrame()">
         <span class="icon">📷</span> Photo
       </button>
+      <button class="cam-action-btn" id="btn-rec-start" onclick="startVideoRecord()">
+        <span class="icon">🎥</span> Record
+      </button>
+      <button class="cam-action-btn recording" id="btn-rec-stop" onclick="stopVideoRecord()" style="display:none">
+        <span class="icon">⏹</span> <span id="rec-timer">00:00</span>
+      </button>
     </div>
 
-    <!-- Hidden file input -->
-    <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFileSelect(this)"/>
+    <!-- Hidden file input — accepts both images and videos -->
+    <input type="file" id="file-input" accept="image/*,video/mp4,video/webm,video/quicktime,video/x-msvideo" style="display:none" onchange="handleFileSelect(this)"/>
   </div>
 
   <!-- ── Report Details Sheet ── -->
@@ -424,7 +430,20 @@
       <h3 style="margin-top:0; margin-bottom:12px; font-size:16px; color:var(--text-primary); display:flex; align-items:center; gap:8px;">
         <span id="pre-sev-icon" style="font-size:20px;">🔥</span> 
         <span>Fire Detected: <span id="pre-sev-text" style="font-weight:800; color:var(--fire-orange);">Medium</span></span>
+        <span id="pre-media-badge" style="margin-left:auto; font-size:10px; padding:2px 8px; border-radius:20px; background:rgba(255,255,255,0.1); color:var(--text-muted); font-weight:600; display:none;"></span>
       </h3>
+
+      <!-- Confidence meter -->
+      <div style="margin-bottom:14px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+          <span style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Detection Confidence</span>
+          <span id="pre-conf-pct" style="font-size:13px; font-weight:800; color:var(--fire-orange);">—</span>
+        </div>
+        <div style="height:6px; background:rgba(255,255,255,0.08); border-radius:3px; overflow:hidden;">
+          <div id="pre-conf-bar" style="height:100%; border-radius:3px; background:linear-gradient(90deg,#FF4500,#FF6B35); transition:width 0.6s ease; width:0%;"></div>
+        </div>
+      </div>
+
       <div style="display:flex; justify-content:space-between; margin-bottom:12px; background:var(--bg-panel); padding:10px; border-radius:8px;">
         <div><div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Estimated Water</div>
         <div style="font-size:16px; font-weight:800; color:var(--info);" id="pre-water-text">2,500 L</div></div>
