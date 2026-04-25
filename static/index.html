@@ -425,25 +425,16 @@
     <div class="sheet-title">🔥 Report a Fire</div>
     <div class="sheet-sub">Fill your info and tap the button to alert the nearest fire station instantly.</div>
 
-    <!-- PRE-ANALYSIS RESULT CONTAINER -->
+    <!-- PRE-ANALYSIS RESULT CONTAINER (Feature 9) -->
+    <div id="pre-analysis-result" class="hidden" style="margin-bottom:16px;"></div>
+
+    <!-- PRE-ANALYSIS RESULT CONTAINER (legacy compat) -->
     <div id="pre-analysis-container" style="display:none; background:rgba(255,69,0,0.08); border:1px solid rgba(255,69,0,0.3); border-radius:12px; padding:16px; margin-bottom:20px;">
       <h3 style="margin-top:0; margin-bottom:12px; font-size:16px; color:var(--text-primary); display:flex; align-items:center; gap:8px;">
         <span id="pre-sev-icon" style="font-size:20px;">🔥</span> 
         <span>Fire Detected: <span id="pre-sev-text" style="font-weight:800; color:var(--fire-orange);">Medium</span></span>
         <span id="pre-media-badge" style="margin-left:auto; font-size:10px; padding:2px 8px; border-radius:20px; background:rgba(255,255,255,0.1); color:var(--text-muted); font-weight:600; display:none;"></span>
       </h3>
-
-      <!-- Confidence meter -->
-      <div style="margin-bottom:14px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
-          <span style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Detection Confidence</span>
-          <span id="pre-conf-pct" style="font-size:13px; font-weight:800; color:var(--fire-orange);">—</span>
-        </div>
-        <div style="height:6px; background:rgba(255,255,255,0.08); border-radius:3px; overflow:hidden;">
-          <div id="pre-conf-bar" style="height:100%; border-radius:3px; background:linear-gradient(90deg,#FF4500,#FF6B35); transition:width 0.6s ease; width:0%;"></div>
-        </div>
-      </div>
-
       <div style="display:flex; justify-content:space-between; margin-bottom:12px; background:var(--bg-panel); padding:10px; border-radius:8px;">
         <div><div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Estimated Water</div>
         <div style="font-size:16px; font-weight:800; color:var(--info);" id="pre-water-text">2,500 L</div></div>
@@ -452,28 +443,20 @@
       </div>
       <div>
         <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700; margin-bottom:6px;">Safety Tips</div>
-        <ul id="pre-tips-list" style="margin:0; padding-left:20px; font-size:13px; color:var(--text-primary); line-height:1.5;">
-        </ul>
-      </div>
-      <div id="small-fire-msg" style="display:none; margin-top:16px; padding:12px; background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.3); border-radius:8px; color:var(--text-primary); font-size:14px; text-align:center;">
-        <strong style="color:var(--success);">No Need To Report!</strong><br/>
-        This fire is considered small. Please use a bucket of water or domestic extinguisher and follow the safety tips to clear it safely.
-      </div>
-      <div id="pre-actions-row" style="display:none; margin-top:16px;">
-        <button class="btn btn-secondary btn-full" style="border-color:var(--success); color:var(--success);" onclick="reportAnother()">✅ I safely cleared it (Dismiss)</button>
+        <ul id="pre-tips-list" style="margin:0; padding-left:20px; font-size:13px; color:var(--text-primary); line-height:1.5;"></ul>
       </div>
     </div>
 
-    <!-- Reporter Info -->
+    <!-- Reporter Info (Feature 5: citizen-name and citizen-phone IDs) -->
     <div id="reporter-form-section">
       <div class="info-grid">
         <div class="form-group">
-          <label class="label">Your Name</label>
-          <input class="input" id="r-name" type="text" placeholder="e.g. Rahul Kumar" autocomplete="name"/>
+          <label class="label">Your Name (optional)</label>
+          <input class="input" id="citizen-name" type="text" placeholder="e.g. Rahul Kumar" autocomplete="name"/>
         </div>
         <div class="form-group">
-          <label class="label">Your Phone</label>
-          <input class="input" id="r-phone" type="tel" placeholder="e.g. 9876543210" autocomplete="tel"/>
+          <label class="label">Your Phone (optional)</label>
+          <input class="input" id="citizen-phone" type="tel" placeholder="+91-XXXXXXXXXX" autocomplete="tel"/>
         </div>
       </div>
 
@@ -517,6 +500,12 @@
     </details>
     </div> <!-- /#reporter-form-section -->
   </div>
+
+  <!-- FEATURE 1: Safety Checklist (shown after successful submission) -->
+  <div id="safety-checklist" class="hidden" style="margin:0 16px 80px;"></div>
+
+  <!-- FEATURE 2: Fire Spread Timer (shown after successful submission) -->
+  <div id="spread-timer" class="hidden" style="margin:0 16px 80px;"></div>
 
   <!-- Submit FAB -->
   <button class="submit-fab" id="btn-report" onclick="submitReport()">

@@ -63,6 +63,8 @@ def analyze_fire_image(image_path):
     """
     Main entry point for single images.
     Always returns a complete dict — never crashes.
+    Uses hue-space color analysis (Computer Vision / Hue-Space Fire Detection).
+    NOT a machine learning model.
     """
     try:
         if not image_path:
@@ -221,12 +223,13 @@ def _pick_worst_result(results):
 # ─── Core CV Engine ─────────────────────────────────────────────────────
 def _analyze_cv(image_path):
     """
-    Strict, multi-stage fire detection:
+    Strict, multi-stage fire detection (Computer Vision / Hue-Space Analysis):
       Stage 1  — Hue gate             (orange flame zone only)
       Stage 2  — Luminance gate       (bright enough to be burning)
       Stage 3  — Colour temperature   (R >> G > B gradient)
       Stage 4  — Saturation variance  (fire is chaotic, sun is uniform)
       Stage 5  — Texture / edge proxy (fire has many colour transitions)
+      Stage 6  — Bright pixel check   (at least 3% 'bright fire' pixels)
     Returns a full result dict.
     """
     img = Image.open(image_path).convert('RGB')  # type: ignore
@@ -261,7 +264,8 @@ def _analyze_cv(image_path):
         # Passed all gates — count it
         fire_pixels += 1
         sat_vals.append(sat)
-        if val > 0.88:
+        # BUG 3 FIX: Track bright fire pixels (val > 0.70)
+        if val > 0.70:
             bright_pixels += 1
 
     ratio = fire_pixels / total
@@ -295,13 +299,14 @@ def _analyze_cv(image_path):
         edge_samples if edge_samples > 0 else 0.0  # type: ignore
     has_texture = edge_ratio > 0.08
 
+    # ── Stage 6 (BUG 3 FIX): Must have at least 3% bright fire pixels ────────
+    bright_ratio = bright_pixels / total
+    has_bright_fire = bright_ratio >= 0.03
+
     # ── Final Decision ──────────────────────────────────────────────────────
-    # Enough fire-coloured pixels (lowered threshold)
-    # OR if ratio is high enough (>2%), we force detection regardless of chaos/texture
-    fire_detected = (
-        (ratio > 0.002 and is_chaotic and has_texture) or
-        (ratio > 0.01)
-    )
+    # BUG 3 FIX: Removed forced detection line (ratio > 0.01).
+    # All 3 conditions must pass + bright fire pixel check.
+    fire_detected = (ratio > 0.003 and is_chaotic and has_texture and has_bright_fire)
 
     if not fire_detected:
         return _no_fire_result(confidence=float(
@@ -383,7 +388,7 @@ def _build_fire_result(ratio, bright_pixels, total):
             'Stay low in smoke.',
             'Call 101 — multiple units needed.'],
     }
-    colors = {
+    sev_colors = {
         'Tiny': '#3B82F6',
         'Small': '#22C55E',
         'Medium': '#F59E0B',
@@ -392,7 +397,7 @@ def _build_fire_result(ratio, bright_pixels, total):
     return {
         'fire_detected': True,
         'severity': severity,
-        'severity_color': colors[severity],
+        'severity_color': sev_colors[severity],
         'confidence': conf,
         'fire_pixel_ratio': float(f"{ratio * 100:.1f}"),
         'water_liters': int(water),

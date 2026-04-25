@@ -1,17 +1,27 @@
 /* auth.js — FireSense Login & Register Logic */
 
-// ─── Toast ────────────────────────────────────────────
+// ─── Toast (stackable, with close button — UI 4) ──────────────────────────
+let toastIdCounter = 0;
 function showToast(msg, type = 'info') {
   const icons = { success: '✅', error: '❌', info: 'ℹ️', warning: '⚠️' };
   const container = document.getElementById('toast-container');
+  const id = `toast-${++toastIdCounter}`;
   const el = document.createElement('div');
+  el.id = id;
   el.className = `toast toast-${type}`;
-  el.innerHTML = `<span style="font-size:18px">${icons[type]}</span><span style="flex:1">${msg}</span>`;
+  el.innerHTML = `
+    <span style="font-size:18px">${icons[type]||'ℹ️'}</span>
+    <span style="flex:1">${msg}</span>
+    <button onclick="document.getElementById('${id}')?.remove()"
+      style="background:none;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;line-height:1;padding:0 0 0 8px">×</button>
+  `;
   container.appendChild(el);
   setTimeout(() => {
-    el.style.opacity = '0'; el.style.transform = 'translateX(120%)';
-    el.style.transition = 'all 0.3s'; setTimeout(() => el.remove(), 350);
-  }, 4000);
+    if (el.parentNode) {
+      el.style.opacity = '0'; el.style.transform = 'translateX(120%)';
+      el.style.transition = 'all 0.3s'; setTimeout(() => el.remove(), 350);
+    }
+  }, 4500);
 }
 
 // ─── Login ────────────────────────────────────────────
@@ -84,6 +94,7 @@ window.addEventListener('DOMContentLoaded', () => {
   });
 });
 
+// BUG 8 FIX: Full input validation in handleRegister
 async function handleRegister(e) {
   e.preventDefault();
   const btn = document.getElementById('reg-btn');
@@ -92,16 +103,41 @@ async function handleRegister(e) {
   errEl.classList.add('hidden');
   sucEl.classList.add('hidden');
 
-  const pass = document.getElementById('reg-pass').value;
-  const pass2 = document.getElementById('reg-pass2').value;
-  if (pass !== pass2) {
-    errEl.textContent = '❌ Passwords do not match';
+  const name    = document.getElementById('reg-name').value.trim();
+  const contact = document.getElementById('reg-contact').value.trim();
+  const pass    = document.getElementById('reg-pass').value;
+  const pass2   = document.getElementById('reg-pass2').value;
+  const lat     = parseFloat(document.getElementById('reg-lat').value);
+  const lng     = parseFloat(document.getElementById('reg-lng').value);
+
+  // BUG 8: Validate name (3–100 chars)
+  if (name.length < 3 || name.length > 100) {
+    errEl.textContent = '❌ Station name must be between 3 and 100 characters';
     errEl.classList.remove('hidden'); return;
   }
-  const lat = parseFloat(document.getElementById('reg-lat').value);
-  const lng = parseFloat(document.getElementById('reg-lng').value);
+
+  // BUG 8: Validate contact format if provided
+  if (contact && !/^[\d\s\+\-\(\)]{7,20}$/.test(contact)) {
+    errEl.textContent = '❌ Contact number format invalid. Use digits, spaces, +, -, ( ) only (7–20 characters)';
+    errEl.classList.remove('hidden'); return;
+  }
+
+  // BUG 8: Validate India coordinate bounds
   if (isNaN(lat) || isNaN(lng)) {
     errEl.textContent = '❌ Please click on the map to set your station location';
+    errEl.classList.remove('hidden'); return;
+  }
+  if (lat < 6.5 || lat > 37.5) {
+    errEl.textContent = '❌ Latitude must be between 6.5 and 37.5 (India bounds)';
+    errEl.classList.remove('hidden'); return;
+  }
+  if (lng < 68.0 || lng > 98.0) {
+    errEl.textContent = '❌ Longitude must be between 68.0 and 98.0 (India bounds)';
+    errEl.classList.remove('hidden'); return;
+  }
+
+  if (pass !== pass2) {
+    errEl.textContent = '❌ Passwords do not match';
     errEl.classList.remove('hidden'); return;
   }
 
@@ -112,9 +148,9 @@ async function handleRegister(e) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name: document.getElementById('reg-name').value.trim(),
+        name,
         address: document.getElementById('reg-address').value.trim(),
-        contact: document.getElementById('reg-contact').value.trim(),
+        contact,
         lat, lng, password: pass
       })
     });
@@ -127,7 +163,6 @@ async function handleRegister(e) {
   } catch (err) {
     errEl.textContent = '❌ ' + err.message;
     errEl.classList.remove('hidden');
-    btn.disabled = false; btn.textContent = '🏢 Register Station';
   }
   btn.disabled = false; btn.textContent = '🏢 Register Station';
 }

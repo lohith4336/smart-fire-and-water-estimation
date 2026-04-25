@@ -20,7 +20,9 @@ from fire_analysis import analyze_fire_image, analyze_fire_video, is_video_path
 #  App Setup
 # ─────────────────────────────────────────────
 app = Flask(__name__, static_folder='static', static_url_path='/static')
-app.config['JWT_SECRET_KEY'] = 'firesense-super-secret-key-2024'
+# BUG 2 FIX: Load JWT secret from environment variable
+app.config['JWT_SECRET_KEY'] = os.environ.get(
+    'JWT_SECRET_KEY', os.urandom(32).hex())
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=8)
 app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024   # 50 MB
@@ -105,10 +107,17 @@ def init_db():
             citizen_name  TEXT,
             citizen_phone TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS report_status_history (
+            id         TEXT PRIMARY KEY,
+            report_id  TEXT,
+            status     TEXT,
+            changed_at TEXT,
+            note       TEXT
+        );
         """)
 
-    # Migration: add citizen_name and citizen_phone columns if they don't
-    # exist yet
+    # Migration: add columns if they don't exist yet
     with get_db() as conn:
         cols = [row[1] for row in conn.execute(
             "PRAGMA table_info(reports)").fetchall()]
@@ -135,7 +144,6 @@ def init_db():
 
 
 init_db()  # Initialize DB on import for Gunicorn/Render compatibility
-# Database schema is ready. Users must now register fire stations manually.
 
 # ─────────────────────────────────────────────
 #  Helpers
@@ -173,7 +181,7 @@ def allowed_file(filename, types):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in types
 
 # ─────────────────────────────────────────────
-#  Page Routes
+#  Page Routes  — BUG 6 FIX
 # ─────────────────────────────────────────────
 
 
@@ -184,17 +192,17 @@ def index():
 
 @app.route('/login')
 def login_page():
-    return send_from_directory('static', 'index.html')
+    return send_from_directory('static', 'login.html')
 
 
 @app.route('/register')
 def register_page():
-    return send_from_directory('static', 'index.html')
+    return send_from_directory('static', 'register.html')
 
 
 @app.route('/dashboard')
 def dashboard_page():
-    return send_from_directory('static', 'index.html')
+    return send_from_directory('static', 'dashboard.html')
 
 
 @app.route('/api/health', methods=['GET'])
@@ -203,7 +211,7 @@ def health_check():
     return jsonify({'status': 'ok', 'server': 'FireSense'}), 200
 
 # ─────────────────────────────────────────────
-#  Auth Endpoints
+#  Media Analysis (Pre-analysis + full)
 # ─────────────────────────────────────────────
 
 
@@ -356,9 +364,13 @@ def delete_my_office():
     office_id = identity['id']
 
     with get_db() as conn:
-        # 1. Delete associated reports first to avoid orphans
+        # 1. Delete status history for this office's reports
+        conn.execute(
+            "DELETE FROM report_status_history WHERE report_id IN "
+            "(SELECT id FROM reports WHERE office_id=?)", (office_id,))
+        # 2. Delete associated reports
         conn.execute("DELETE FROM reports WHERE office_id=?", (office_id,))
-        # 2. Delete the office itself
+        # 3. Delete the office itself
         conn.execute("DELETE FROM fire_offices WHERE id=?", (office_id,))
 
     return jsonify({'message': 'Account and all associated records deleted successfully'}), 200
@@ -480,6 +492,13 @@ def api_submit_report():
                  citizen_name, citizen_phone, severity, water_liters, equipment,
                  confidence, fire_pixel_ratio, bounding_box, 1)
             )
+            # Insert initial status history entry
+            conn.execute(
+                "INSERT INTO report_status_history (id, report_id, status, changed_at, note) "
+                "VALUES (?,?,?,?,?)",
+                (str(uuid.uuid4()), report_id, 'Pending', submitted_at,
+                 'Report submitted by citizen')
+            )
 
         # SSE live push
         push_sse(office['id'], {
@@ -500,7 +519,9 @@ def api_submit_report():
             'distance_km': float(f"{dist_val:.2f}"),
             'severity': severity,
             'water_liters': water_liters,
-            'safety_tips': result.get('safety_tips', [])
+            'safety_tips': result.get('safety_tips', []),
+            'citizen_lat': citizen_lat,
+            'citizen_lng': citizen_lng
         }), 201
 
     except Exception as e:
@@ -570,13 +591,22 @@ def api_get_reports():
 def api_update_status(rid):
     data = request.get_json()
     new_status = data.get('status')
+    note = data.get('note', '')
     if new_status not in ('Pending', 'Dispatched', 'Resolved'):
         return jsonify({'error': 'Invalid status'}), 400
     identity = json.loads(get_jwt_identity())
+    changed_at = datetime.utcnow().isoformat()
+
     with get_db() as conn:
         conn.execute(
             "UPDATE reports SET status=? WHERE id=? AND office_id=?",
             (new_status, rid, identity['id'])
+        )
+        # FEATURE 7: Insert history row
+        conn.execute(
+            "INSERT INTO report_status_history (id, report_id, status, changed_at, note) "
+            "VALUES (?,?,?,?,?)",
+            (str(uuid.uuid4()), rid, new_status, changed_at, note)
         )
     return jsonify({'message': 'Status updated'})
 
@@ -599,11 +629,33 @@ def api_update_notes(rid):
 def api_delete_report(rid):
     identity = json.loads(get_jwt_identity())
     with get_db() as conn:
+        # Delete status history first
+        conn.execute(
+            "DELETE FROM report_status_history WHERE report_id=?", (rid,))
         conn.execute(
             "DELETE FROM reports WHERE id=? AND office_id=?",
-            (rid,
-             identity['id']))
+            (rid, identity['id']))
     return jsonify({'message': 'Report deleted'})
+
+
+# FEATURE 7: Status history endpoint
+@app.route('/api/reports/<rid>/history', methods=['GET'])
+@jwt_required()
+def api_report_history(rid):
+    identity = json.loads(get_jwt_identity())
+    # Verify the report belongs to this office
+    with get_db() as conn:
+        report = conn.execute(
+            "SELECT id FROM reports WHERE id=? AND office_id=?",
+            (rid, identity['id'])
+        ).fetchone()
+        if not report:
+            return jsonify({'error': 'Report not found'}), 404
+        rows = conn.execute(
+            "SELECT * FROM report_status_history WHERE report_id=? ORDER BY changed_at ASC",
+            (rid,)
+        ).fetchall()
+    return jsonify([dict(r) for r in rows])
 
 
 # ─────────────────────────────────────────────

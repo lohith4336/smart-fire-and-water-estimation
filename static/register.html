@@ -4,6 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>FireSense — Register Fire Station</title>
+  <meta name="description" content="Register your fire station with FireSense to receive real-time citizen fire reports."/>
   <link rel="stylesheet" href="/static/css/style.css"/>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <style>
@@ -12,6 +13,7 @@
     .map-hint { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
     .coord-row { display:flex; gap:10px; }
     .coord-row .form-group { flex:1; }
+    .field-hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -30,7 +32,8 @@
       <form id="reg-form" onsubmit="handleRegister(event)">
         <div class="form-group">
           <label class="label" for="reg-name">Station / Office Name *</label>
-          <input class="input" id="reg-name" type="text" placeholder="e.g. Bhopal Fire Station HQ" required/>
+          <input class="input" id="reg-name" type="text" placeholder="e.g. Bhopal Fire Station HQ" required minlength="3" maxlength="100"/>
+          <div class="field-hint">3–100 characters required</div>
         </div>
         <div class="form-group">
           <label class="label" for="reg-address">Address</label>
@@ -39,6 +42,7 @@
         <div class="form-group">
           <label class="label" for="reg-contact">Contact Number</label>
           <input class="input" id="reg-contact" type="text" placeholder="+91-XXXXXXXXXX"/>
+          <div class="field-hint">Format: +91-XXXXXXXXXX (digits, spaces, +, -, ( ) allowed)</div>
         </div>
 
         <div class="form-group">
@@ -49,12 +53,12 @@
 
         <div class="coord-row">
           <div class="form-group">
-            <label class="label" for="reg-lat">Latitude *</label>
-            <input class="input" id="reg-lat" type="number" step="any" placeholder="e.g. 21.1458" required/>
+            <label class="label" for="reg-lat">Latitude * <span style="font-size:11px;color:var(--text-muted)">(6.5–37.5)</span></label>
+            <input class="input" id="reg-lat" type="number" step="any" placeholder="e.g. 21.1458" required min="6.5" max="37.5"/>
           </div>
           <div class="form-group">
-            <label class="label" for="reg-lng">Longitude *</label>
-            <input class="input" id="reg-lng" type="number" step="any" placeholder="e.g. 79.0882" required/>
+            <label class="label" for="reg-lng">Longitude * <span style="font-size:11px;color:var(--text-muted)">(68.0–98.0)</span></label>
+            <input class="input" id="reg-lng" type="number" step="any" placeholder="e.g. 79.0882" required min="68" max="98"/>
           </div>
         </div>
 

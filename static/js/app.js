@@ -653,6 +653,16 @@ async function submitReport() {
     return;
   }
 
+  // BUG 4 FIX: Client-side file size validation
+  if (selectedFile && selectedFile.size > 15 * 1024 * 1024) {
+    showToast('Image file too large. Maximum 15MB allowed.', 'error');
+    return;
+  }
+  if (selectedVideo && selectedVideo.size > 40 * 1024 * 1024) {
+    showToast('Video file too large. Maximum 40MB allowed.', 'error');
+    return;
+  }
+
   const btn = document.getElementById('btn-report');
   btn.disabled = true;
   btn.textContent = '⏳ Sending Alert...';
@@ -661,25 +671,27 @@ async function submitReport() {
   fd.append('lat', userLat);
   fd.append('lng', userLng);
   fd.append('address', document.getElementById('addr-hint').value.trim());
-  fd.append('citizen_name',  document.getElementById('r-name').value.trim());
-  fd.append('citizen_phone', document.getElementById('r-phone').value.trim());
+  // FEATURE 5: Use correct citizen-name / citizen-phone IDs
+  const cnameEl  = document.getElementById('citizen-name')  || document.getElementById('r-name');
+  const cphoneEl = document.getElementById('citizen-phone') || document.getElementById('r-phone');
+  fd.append('citizen_name',  cnameEl  ? cnameEl.value.trim()  : '');
+  fd.append('citizen_phone', cphoneEl ? cphoneEl.value.trim() : '');
   if (selectedFile)  fd.append('image', selectedFile);
   if (selectedVideo) fd.append('video', selectedVideo);
   if (window.lastAnalysisData) fd.append('analysis_data', window.lastAnalysisData);
 
   try {
-    // Use plain fetch (no retry) — report is a one-shot action, not a network ping
     let res;
     try {
       res = await fetch(API + '/api/reports', { method: 'POST', body: fd });
     } catch (netErr) {
-      throw new Error(`Cannot reach python server at ${API || window.location.origin}. Make sure you have opened a terminal and run 'python app.py' so the backend is online!`);
+      throw new Error(`Cannot reach server at ${API || window.location.origin}. Make sure python app.py is running!`);
     }
 
     const text = await res.text();
     let data = {};
     try { data = JSON.parse(text); } catch(e) {
-      throw new Error(text ? `Server error ${res.status}: ${text.substring(0, 120)}` : `Server returned empty response (Status: ${res.status} ${res.statusText}).`);
+      throw new Error(text ? `Server error ${res.status}: ${text.substring(0, 120)}` : `Empty response (Status: ${res.status}).`);
     }
     if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
 
@@ -689,6 +701,17 @@ async function submitReport() {
     document.getElementById('suc-detail').innerHTML = `<strong>Your report has been successfully submitted to the nearest Fire Station.</strong><br/><br/>Their firefighters have been notified and will be responding shortly.`;
     document.getElementById('success-screen').classList.add('show');
     showToast(`🚒 Report submitted to ${data.office_name}! Help is on the way.`, 'success');
+
+    // FEATURE 1: Show safety checklist
+    const checklistEl = document.getElementById('safety-checklist');
+    if (checklistEl && typeof renderSafetyChecklist === 'function') {
+      renderSafetyChecklist(data.severity);
+    }
+    // FEATURE 2: Fire spread timer
+    const spreadEl = document.getElementById('spread-timer');
+    if (spreadEl && typeof startSpreadTimer === 'function') {
+      startSpreadTimer(data.severity, userLat, userLng);
+    }
 
     // Browser Push Notification
     if ('Notification' in window && Notification.permission === 'granted') {
@@ -717,6 +740,8 @@ function reportAnother() {
   selectedFile = null; selectedVideo = null;
   window.lastAnalysisData = null;
   document.getElementById('pre-analysis-container').style.display = 'none';
+  const paEl = document.getElementById('pre-analysis-result');
+  if (paEl) { paEl.innerHTML = ''; paEl.classList.add('hidden'); }
   document.getElementById('success-screen').classList.remove('show');
   document.getElementById('suc-dist').style.display = 'block';
   document.getElementById('btn-report').disabled = false;
@@ -727,13 +752,110 @@ function reportAnother() {
   if (reporterForm) reporterForm.style.display = 'block';
   const smallFireMsg = document.getElementById('small-fire-msg');
   if (smallFireMsg) smallFireMsg.style.display = 'none';
-  document.getElementById('r-name').value = '';
-  document.getElementById('r-phone').value = '';
-  document.getElementById('addr-hint').value = '';
+  // Clear both old and new field IDs safely
+  ['citizen-name','citizen-phone','r-name','r-phone','addr-hint'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  // Hide Feature 1 and Feature 2 panels
+  const clEl = document.getElementById('safety-checklist');
+  if (clEl) clEl.classList.add('hidden');
+  const stEl = document.getElementById('spread-timer');
+  if (stEl) stEl.classList.add('hidden');
+  // Clear spread timer interval if running
+  if (typeof spreadTimerInterval !== 'undefined' && spreadTimerInterval) {
+    clearInterval(spreadTimerInterval);
+    spreadTimerInterval = null;
+  }
   updateMediaIndicator();
   document.getElementById('snap-overlay').style.display = 'none';
   document.getElementById('nearest-pill').classList.remove('show');
   startCitizenCamera();
+}
+
+/* ══════════════════════════════════════════════════════
+   FEATURE 1: Safety Checklist
+══════════════════════════════════════════════════════ */
+function renderSafetyChecklist(severity) {
+  const container = document.getElementById('safety-checklist');
+  if (!container) return;
+  const steps = {
+    'Tiny':   ['Stay calm — this is a very small fire', 'Use a wet blanket or domestic extinguisher if safe', 'Watch closely — if it spreads, evacuate immediately', 'Call 101 if it grows'],
+    'Small':  ['Move everyone away from the area NOW', 'Do NOT use water on electrical fires — use dry powder', 'Pull the nearest fire alarm', 'Call 101 and stay on the line', 'Do not re-enter the building'],
+    'Medium': ['🚨 EVACUATE the entire floor IMMEDIATELY', 'Close all doors behind you to slow the spread', 'Activate building fire alarms', 'Call 101 — tell them the floor and building name', 'Gather at your designated muster point', 'Do NOT use elevators'],
+    'Large':  ['🚨 EVACUATE THE BUILDING — do NOT delay', 'Warn all neighbours and people nearby', 'Stay low if there is smoke — crawl if needed', 'Call 101 and stay on the line with the operator', 'Do NOT go back inside for any reason', 'Multiple fire units have been requested']
+  };
+  const checklistSteps = steps[severity] || steps['Small'];
+  container.innerHTML = `
+    <div class="safety-checklist-card">
+      <div class="safety-checklist-title">🛡️ What to do RIGHT NOW (${severity || 'Fire'} Alert)</div>
+      <ol class="safety-checklist-list">
+        ${checklistSteps.map((step, i) => `
+          <li class="safety-checklist-item" id="cl-item-${i}" onclick="toggleChecklistItem(${i})">
+            <span class="cl-checkbox" id="cl-check-${i}">☐</span>
+            <span>${step}</span>
+          </li>`).join('')}
+      </ol>
+    </div>`;
+  container.classList.remove('hidden');
+}
+
+function toggleChecklistItem(i) {
+  const checkEl = document.getElementById(`cl-check-${i}`);
+  const itemEl  = document.getElementById(`cl-item-${i}`);
+  if (!checkEl || !itemEl) return;
+  const isDone = checkEl.textContent === '✅';
+  checkEl.textContent = isDone ? '☐' : '✅';
+  itemEl.style.opacity = isDone ? '1' : '0.5';
+  itemEl.style.textDecoration = isDone ? 'none' : 'line-through';
+}
+
+/* ══════════════════════════════════════════════════════
+   FEATURE 2: Fire Spread Timer
+══════════════════════════════════════════════════════ */
+let spreadTimerInterval = null;
+let spreadMap2 = null;
+let spreadCircle2 = null;
+
+function startSpreadTimer(severity, lat, lng) {
+  const container = document.getElementById('spread-timer');
+  if (!container) return;
+  const spreadRates = { 'Tiny': 0, 'Small': 1, 'Medium': 3, 'Large': 8 };
+  const rate = spreadRates[severity] ?? 1;
+  const startTime = Date.now();
+  container.innerHTML = `
+    <div class="spread-timer-card">
+      <div class="spread-timer-title">🔥 Fire Spread Estimate — ${severity} Fire</div>
+      <div id="spread-elapsed2" style="font-size:20px;font-weight:700;color:var(--fire-orange);margin-bottom:12px">Time since reported: 0 min 0 sec</div>
+      <div style="font-size:14px;color:var(--text-muted);margin-bottom:14px">
+        Estimated radius: <strong id="spread-radius-val2">0 m</strong>
+      </div>
+      <div id="spread-map2" style="height:200px;border-radius:var(--radius-md);overflow:hidden;border:1px solid var(--border);"></div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:10px;padding:8px;background:rgba(245,158,11,0.08);border-radius:6px;border:1px solid rgba(245,158,11,0.2)">
+        ⚠ Estimated only — actual spread depends on wind and fuel
+      </div>
+    </div>`;
+  container.classList.remove('hidden');
+  setTimeout(() => {
+    if (spreadMap2) { spreadMap2.remove(); spreadMap2 = null; }
+    spreadMap2 = L.map('spread-map2', { zoomControl: false }).setView([lat, lng], 14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' }).addTo(spreadMap2);
+    L.marker([lat, lng], {
+      icon: L.divIcon({ html: '<div style="font-size:22px">🔥</div>', className: '', iconAnchor: [11,11] })
+    }).addTo(spreadMap2);
+    spreadCircle2 = L.circle([lat, lng], { radius: 0, color: '#FF4500', fillColor: '#FF6B35', fillOpacity: 0.3, weight: 2 }).addTo(spreadMap2);
+  }, 250);
+  if (spreadTimerInterval) clearInterval(spreadTimerInterval);
+  spreadTimerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const mins = Math.floor(elapsed / 60), secs = elapsed % 60;
+    const radius = Math.round(elapsed * rate);
+    const el1 = document.getElementById('spread-elapsed2');
+    const el2 = document.getElementById('spread-radius-val2');
+    if (el1) el1.textContent = `Time since reported: ${mins} min ${secs} sec`;
+    if (el2) el2.textContent = `${radius} m`;
+    if (spreadCircle2) spreadCircle2.setRadius(radius);
+  }, 1000);
 }
 
 /* ══════════════════════════════════════════════════════
